@@ -228,7 +228,7 @@ Database type: Supported type is ':odbc'"
 
 
 ;;;;*********** Globally Cached lists and their accessor functions *********************************
-
+;; 构建全局的功能函数
 (defun hhub-gen-globally-cached-lists-functions ()
   :documentation "These functions are list returning functions. The various lists are accessible throughout the application. For example, list of all the authorization policies, attributes, etc."
   (let ((policies (get-system-auth-policies))
@@ -311,7 +311,7 @@ Database type: Supported type is ':odbc'"
   :documentation "This function gets a list of all the globally cached ABAC policies in a hashtable."
   (let ((policiesfunc-ht (nth 8 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall policiesfunc-ht)))
-
+;; 获取货币，
 (defun hhub-get-cached-currencies-ht ()
   :documentation "This function gets a list of all the globally cached currencies."
   (let ((currencies-ht (nth 9 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))

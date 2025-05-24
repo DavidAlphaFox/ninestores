@@ -2,7 +2,7 @@
 (in-package :hhub)
 (clsql:file-enable-sql-reader-syntax)
 
-
+;;多货币策略，获取当前公司的货币类型
 (defun get-account-currency (company)
   (let* ((country (slot-value company 'country))
 	 (currency-ht (hhub-get-cached-currencies-ht))

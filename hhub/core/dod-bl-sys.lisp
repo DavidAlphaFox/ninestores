@@ -4,7 +4,7 @@
 
 (defun refreshiamsettings ()
   (setf *HHUBGLOBALLYCACHEDLISTSFUNCTIONS* (hhub-gen-globally-cached-lists-functions)))
-
+;; 构建一个保存货币的全部hash表
 (defun get-system-currencies-ht ()
   :documentation "This function stores all the currencies in a hashtable. The Key = country, Value = list of currency, code and symbol."
   (let ((ht (make-hash-table :test 'equal))
