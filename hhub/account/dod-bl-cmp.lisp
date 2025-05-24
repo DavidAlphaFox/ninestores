@@ -99,20 +99,20 @@
 (defun equal-companiesp (cmp1 cmp2)
   (equal (slot-value cmp1 'row-id) (slot-value cmp2 'row-id)))
 
-
+;; 通过公司名称获取某个公司
 (defun select-company-by-name (name-like-clause)
 (car (clsql:select 'dod-company :where [and
 		[= [:deleted-state] "N"]
 		[like  [:name] name-like-clause]]
 		:caching *dod-database-caching* :flatp t)))
 
-
+;; 通过公司名称关键字找出所有可能的公司
 (defun select-companies-by-name (name-like-clause)
  (clsql:select 'dod-company :where [and
 		[= [:deleted-state] "N"]
 		[like  [:name] (format NIL "%~a%"  name-like-clause)]]
 		:caching *dod-database-caching* :flatp t))
-
+;; 通过邮政编码找到所有可能的公司
 (defun select-companies-by-pincode (name-like-clause)
  (clsql:select 'dod-company :where [and
 		[= [:deleted-state] "N"]
@@ -121,7 +121,7 @@
 
 
 
-
+;; 通过id找公司
 (defun select-company-by-id (id)
 (car (clsql:select 'dod-company :where [and
 		[= [:deleted-state] "N"]
@@ -136,13 +136,13 @@
 		[= [:deleted-state] "N"]
 		[<> [:name] "super"]] ; Avoid super company in any list. 
 			      :caching *dod-database-caching* :flatp t ))
-
+;; 删除某个公司
 (defun delete-dod-company ( id )
   (let ((company (car (clsql:select 'dod-company :where [= [:row-id] id] :flatp t :caching *dod-database-caching*))))
     (setf (slot-value company 'deleted-state) "Y")
     (clsql:update-record-from-slot company 'deleted-state)))
     
-
+;; 批量删除列表内的公司
 (defun delete-dod-companies ( list )
   (mapcar (lambda (id)  (let ((company (car (clsql:select 'dod-company :where [= [:row-id] id] :flatp t :caching *dod-database-caching*))))
 			  (setf (slot-value company 'deleted-state) "Y")
