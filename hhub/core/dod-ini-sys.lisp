@@ -240,7 +240,7 @@ Database type: Supported type is ':odbc'"
 	(transactions-ht (get-system-bus-transactions-ht))
 	(policies-ht (get-system-auth-policies-ht))
 	(companies (get-system-companies))
-	(currencies-ht (get-system-currencies-ht))
+	(currencies-ht (get-system-currencies-ht)) ;;货币
 	(curr-html-symbols-ht (get-currency-html-symbol-map))
 	(curr-fa-symbols-ht (get-currency-fontawesome-map))
 	(gst-hsn-codes-ht (get-system-gst-hsn-codes))

@@ -8,15 +8,15 @@
 	 (currency-ht (hhub-get-cached-currencies-ht))
 	 (currency (nth 1 (gethash country currency-ht))))
     (if currency currency *HHUBDEFAULTCURRENCY*)))
-    
+;;为对应的账号生成外部访问连接
 (defun generate-account-ext-url (account)
   :description "Generates an external URL for an account, which can be shared with external entities"
-  (let* ((tenant-id (slot-value account 'row-id))
-	 (param-csv (format nil "tenant-id~C~A" #\linefeed tenant-id))
-	 (param-base64 (cl-base64:string-to-base64-string param-csv)))
-    (format nil "~A/hhub/displaystore?key=~A" *siteurl* param-base64)))
+  (let* ((tenant-id (slot-value account 'row-id)) ;;账号的行ID就是租户ID
+	 (param-csv (format nil "tenant-id~C~A" #\linefeed tenant-id)) ;;生成一个用换行符号进行分割的租户ID信息
+	 (param-base64 (cl-base64:string-to-base64-string param-csv))) ;;转成base64
+    (format nil "~A/hhub/displaystore?key=~A" *siteurl* param-base64))) ;;直接填充一个完整的URL
 
-
+;; 更新公司数据
 (defun new-dod-company(cname caddress city state country zipcode website cmp-type subscription-plan createdby updatedby)
   (let  ((company-name cname)
 	 (company-address caddress))
@@ -38,7 +38,7 @@
 							   :updated-by updatedby))))
 
 
-
+;; 暂停账户
 (defun suspendaccount (tenant-id)
   (let* ((company (select-company-by-id tenant-id))
 	(suspend-flag (slot-value company 'suspend-flag)))
@@ -46,7 +46,7 @@
       (setf (slot-value company 'suspend-flag) "Y"))
     (update-company company)
     (setf *HHUBGLOBALLYCACHEDLISTSFUNCTIONS* (hhub-gen-globally-cached-lists-functions))))
-
+;; 重新启用某个账户
 (defun restoreaccount (tenant-id)
   (let* ((company (select-company-by-id tenant-id))
 	(suspend-flag (slot-value company 'suspend-flag)))
@@ -63,31 +63,31 @@
 ;    (defun count-company-customers (company)
 ;      (or (gethash company previous)
 ;	  (setf (gethash company previous) (funcall old-func company))))))
-
+;; 获取账号是多久之前创建的
 (defun account-created-days-ago (account)
   (let ((created (slot-value account 'created)))
     (clsql-sys:duration-reduce (clsql-sys:time-difference (clsql-sys:get-time) created) :day)))
   
-
+;;试用账号，还剩下多少天会过期
 (defun trial-account-days-to-expiry (account)
   (let ((created (slot-value account 'created))
 	(subsplan (slot-value account 'subscription-plan)))
     (when (equal subsplan "TRIAL")
       (- (clsql-sys:duration-reduce (clsql-sys:make-duration :day *HHUBTRIALCOMPANYEXPIRYDAYS*) :day) (clsql-sys:duration-reduce (clsql-sys:time-difference (clsql-sys:get-time) created) :day)))))
   
-
+;; 试用账号，是否已经过期
 (defun trial-account-expired-p (account)
   (let ((created (slot-value account 'created))
 	(subsplan (slot-value account 'subscription-plan)))
     (when (equal subsplan "TRIAL")
       (clsql-sys:duration> (clsql-sys:time-difference (clsql-sys:get-time) created)  (clsql-sys:make-duration :day *HHUBTRIALCOMPANYEXPIRYDAYS*))))) 
-    
+;; 统计当前公司有多少注册用户
 (defun count-company-customers (company) 
  (let ((tenant-id (slot-value company 'row-id))) 
     (first (clsql:select [count [*]] :from 'dod-cust-profile  :where 
 		[and [= [:deleted-state] "N"]
 		[= [:tenant-id] tenant-id]]   :caching nil :flatp t ))))
-
+;; 统计当前公司有多少产品
 (defun count-company-vendors (company) 
  (let ((tenant-id (slot-value company 'row-id))) 
     (first (clsql:select [count [*]] :from 'dod-vend-profile  :where 

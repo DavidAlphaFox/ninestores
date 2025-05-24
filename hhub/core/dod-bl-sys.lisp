@@ -4,11 +4,11 @@
 
 (defun refreshiamsettings ()
   (setf *HHUBGLOBALLYCACHEDLISTSFUNCTIONS* (hhub-gen-globally-cached-lists-functions)))
-;; 构建一个保存货币的全部hash表
+;; 构建一个保存货币的全部hash表,Key是国家，值为货币名称，包含代码和符号
 (defun get-system-currencies-ht ()
   :documentation "This function stores all the currencies in a hashtable. The Key = country, Value = list of currency, code and symbol."
   (let ((ht (make-hash-table :test 'equal))
-	(currencies (clsql:select 'dod-currncy :caching *dod-database-caching* :flatp t )))
+	(currencies (clsql:select 'dod-currncy :caching *dod-database-caching* :flatp t ))) ;;从数据库中抽取
     (loop for curr in currencies do
       (let ((key (slot-value curr 'country))
 	    (currency (slot-value curr 'currency))
