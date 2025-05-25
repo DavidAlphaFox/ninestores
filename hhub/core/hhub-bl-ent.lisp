@@ -5,7 +5,7 @@
 ;; Level 1 
 ;; A business server is the highest level of business abstraction on the hardware
 ;; level as it is tied to a single IP address 
-
+;; 业务服务器抽象
 (defclass BusinessServer () 
   ((id :accessor id
        :initform (format nil "~A" (uuid:make-v1-uuid))
@@ -34,7 +34,8 @@
 ;; Level 2
 ;; A business context comes after Business server. Inside a business server, there will be multiple
 ;; business contexts. Under each logical business context, several business sessions will
-;; exist. 
+;; exist.
+;; 业务逻辑上下文
 (defclass BusinessContext ()
   ((id :accessor id
        :initform (format nil "~A" (uuid:make-v1-uuid))
@@ -81,7 +82,7 @@
    (uwebsession)))
    
   
-
+;;每个业务服务器，都会有多个业务对象仓库，每个业务对象仓库内都有多个业务逻辑对象
 ;; Level 2
 ;; Under a business server there will  be several business object repositories. Under each
 ;; business object repository, there will be several business objects. 
@@ -95,7 +96,7 @@
     :accessor businessobjects-ht
     :initform (make-hash-table :test 'equal)
     :initarg :businessobjects-ht)))
-
+;; 业务逻辑对象，每个业务逻辑对象必须要有ID
 ;; Level 3
 ;; Each business object will have an ID and several of its own fields/properties/slots. 
 (defclass BusinessObject ()  ;; This is the domain model entity in DDD
