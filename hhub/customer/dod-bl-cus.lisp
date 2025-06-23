@@ -19,7 +19,7 @@
 
  
 
-
+;;更新客户的钱包余额
 (defun update-cust-wallet-balance (amount wallet-id)
   (let* ((wallet (get-cust-wallet-by-id wallet-id (get-login-customer-company)))
 	 (current-balance (slot-value wallet 'balance))
