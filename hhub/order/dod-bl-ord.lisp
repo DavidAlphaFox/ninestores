@@ -6,40 +6,58 @@
 
 (defun set-order-fulfilled ( value vendor order-instance company-instance)
     :documentation "value should be Y or N, followed by order instance and company instance"
-  (let* ((vendor-order (get-vendor-order-instance (slot-value order-instance 'row-id) vendor))
-	 ;;(order-id (slot-value order-instance 'row-id))
-	 (customer (get-customer order-instance)) 
-	 (payment-mode (slot-value order-instance 'payment-mode))
-	 (wallet (get-cust-wallet-by-vendor customer vendor company-instance))
-	 (vendor-order-items (get-order-items-for-vendor-by-order-id  order-instance vendor ))
-	 (total   (reduce #'+  (mapcar (lambda (voitem)
-					 (* (slot-value voitem 'unit-price) (slot-value voitem 'prd-qty))) vendor-order-items))))
-        (if (equal (slot-value (get-company order-instance) 'name) (slot-value  company-instance 'name))
-	(progn
-	  ;; complete the order items for that particular vendor.  	
-	  (mapcar (lambda (voitem)
-		    (progn
-		      (setf (slot-value voitem 'status) "CMP")
-		      (setf (slot-value voitem 'fulfilled) value)
-		      (update-order-item voitem)))   vendor-order-items)
-	  ;; complete the vendor_order  
-	  (if vendor-order 
-	      (progn  
-		(setf (slot-value vendor-order 'status) "CMP")
-		(setf (slot-value vendor-order 'fulfilled) value)
-		(setf (slot-value vendor-order 'shipped-date) (clsql-sys:get-date))
-		(update-order vendor-order)))
-	  ;; Complete the main order only if all other vendor-order-items have been completed. 
-	  (if (equal (count-order-items-pending order-instance company-instance) 0 ) 
-	      (progn (setf (slot-value order-instance 'order-fulfilled) value)
-		     (setf (slot-value order-instance 'shipped-date) (clsql-sys:get-date))
-		     (setf (slot-value order-instance 'status ) "CMP")
-		     (update-order order-instance)))
-	  (dod-reset-order-functions vendor company-instance)
-	  ;; Deduct the money from the wallet. 
-	  (if (equal payment-mode "PRE") (deduct-wallet-balance total wallet))))))
+  (let* ((vendor-order
+           (get-vendor-order-instance
+             (slot-value order-instance 'row-id) vendor))
+	        ;;(order-id (slot-value order-instance 'row-id))
+          ;;得到客户信息
+	        (customer (get-customer order-instance))
+          ;;得到支付模式
+	        (payment-mode (slot-value order-instance 'payment-mode))
+          ;;得到用户钱包
+	        (wallet (get-cust-wallet-by-vendor customer vendor company-instance))
+          ;;得到订单内容
+	        (vendor-order-items (get-order-items-for-vendor-by-order-id
+                                order-instance vendor ))
+          ;;计算订单总价格
+	        (total   (reduce #'+  (mapcar (lambda (voitem)
+					                                (* (slot-value voitem 'unit-price)
+                                            (slot-value voitem 'prd-qty)))
+                                  vendor-order-items))))
+    ;;如果订单中公司名称和当前公司名称相同
+    (if (equal (slot-value (get-company order-instance) 'name)
+          (slot-value  company-instance 'name))
+	    (progn
+	      ;; complete the order items for that particular vendor.
+        ;;完成特定供货商的订单
+	      (mapcar (lambda (voitem)
+		              (progn
+		                (setf (slot-value voitem 'status) "CMP")
+		                (setf (slot-value voitem 'fulfilled) value)
+		                (update-order-item voitem)))
+          vendor-order-items)
+	      ;; complete the vendor_order
+        ;; 特定供应商的订单整体标记完成
+	      (if vendor-order
+	        (progn
+		        (setf (slot-value vendor-order 'status) "CMP")
+		        (setf (slot-value vendor-order 'fulfilled) value)
+		        (setf (slot-value vendor-order 'shipped-date)
+              (clsql-sys:get-date))
+		        (update-order vendor-order)))
+	      ;; Complete the main order only if all other vendor-order-items have been completed.
+        ;; 当客户订单中所有的供货商订单都完成了，那么就标记整个订单完成
+	      (if (equal (count-order-items-pending order-instance company-instance) 0 )
+	        (progn (setf (slot-value order-instance 'order-fulfilled) value)
+		        (setf (slot-value order-instance 'shipped-date) (clsql-sys:get-date))
+		        (setf (slot-value order-instance 'status ) "CMP")
+		        (update-order order-instance)))
+	      (dod-reset-order-functions vendor company-instance)
+	      ;; Deduct the money from the wallet.
+        ;; 从钱包中扣去费用
+	      (if (equal payment-mode "PRE")
+          (deduct-wallet-balance total wallet))))))
 
-    
     
 
 

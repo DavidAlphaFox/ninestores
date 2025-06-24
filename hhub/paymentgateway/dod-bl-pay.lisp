@@ -8,6 +8,8 @@
 
 (defun get-payment-trans-by-transaction-id (trans-id company)
   (let ((tenant-id (slot-value company 'row-id)))
+    ;;获取公司的租赁ID
+    ;;从数据库找到该租赁ID下对应转账ID的详细信息
     (car (clsql:select 'dod-payment-transaction  :where 
 		       [and [= [:deleted-state] "N"] 
 		       [= [:tenant-id] tenant-id]
