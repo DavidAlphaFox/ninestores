@@ -2,12 +2,14 @@
 (clsql:file-enable-sql-reader-syntax)
 
 
-  
+;;用户创建/编辑页面
 (defun com-hhub-transaction-sadmin-create-users-page ()
- (with-opr-session-check 
+ (with-opr-session-check
+   ;;得到用户的租赁ID
    (let* ((tenant-id (hunchentoot:parameter "tenant-id"))
-	  (users (get-users-for-company tenant-id))
-	  (params nil))
+           ;;得到当前租户下面所有的用户
+	         (users (get-users-for-company tenant-id))
+	         (params nil))
 
      (setf params (acons "uri" (hunchentoot:request-uri*)  params))
      (setf params (acons "username" (get-login-username)  params))
@@ -22,7 +24,7 @@
 	 (cl-who:str (display-as-table (list "Name" "Phone number" "Email" "Action")  users 'user-card)))))))
 
 
-
+;;用户信息卡
 (defun user-card (user-instance &rest arguments)
   (declare (ignore arguments))
   (let ((name (slot-value user-instance 'name))
@@ -167,7 +169,9 @@
   (hunchentoot:session-value :login-user-name))
 
 
-(defun verify-superadmin ();;"Verifies whether username is superadmin" 
+(defun verify-superadmin ();;"Verifies whether username is superadmin"
+  ;;简单的判断session中是否有superadmin的用户名
+  ;;这个逻辑过于草率了
   (if (equal (get-login-username) "superadmin") T NIL ))
 
 (defun superadmin-login ()

@@ -27,7 +27,7 @@
     (set-wallet-balance latest-balance wallet)))
 
 
-
+;;处理客户的结果
 (defmethod ProcessResponse ((service Address-Adapter)  params)
   (let* ((address (cdr (assoc "address" params :test 'equal)))
 	 (responsemodel (make-instance 'ResponseAddress)))
@@ -45,7 +45,7 @@
     ;; return the responsemodel
     responsemodel))
     
-
+;;显示用户地址信息
 (defmethod CreateViewModel ((service Address-Presenter) (responsemodel ResponseAddress))
   (let ((viewmodel (make-instance 'AddressViewModel)))
     (with-slots (locality city state pincode) responsemodel
@@ -127,7 +127,7 @@
 	  
 
 
-
+;;使用名字选中对应的客户
 (defun select-customer-by-name (name-like-clause company)
   (let ((tenant-id (slot-value company 'row-id)))
     (car (clsql:select 'dod-cust-profile :where [and
@@ -138,7 +138,7 @@
 		  [like  [:name] name-like-clause]]
 					 :caching *dod-database-caching* :flatp t))))
 
-
+;; 使用名字选定对应的客户列表
 (defun select-customer-list-by-name (name-like-clause company)
   (let ((tenant-id (slot-value company 'row-id)))
     (clsql:select 'dod-cust-profile :where [and

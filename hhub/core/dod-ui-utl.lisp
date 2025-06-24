@@ -611,6 +611,7 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-opr-session-check (&body body)
+    ;;检查是否是超级用户，如果是超级用户，才执行相关逻辑
     `(if (and (verify-superadmin)  hunchentoot:*session*) ,@body 
 					;else 
 	 (hunchentoot:redirect *HHUBOPRLOGINPAGEURL*))))
