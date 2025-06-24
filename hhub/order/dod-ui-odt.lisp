@@ -133,12 +133,16 @@
 
 (defun calculate-order-item-cost (order-item)
   :description "calculates the order item cost with respect to the unit price, discount, and tax rates if applicable"
-  (let* ((discount (slot-value order-item 'disc-rate)) 
-	 (unit-price (slot-value order-item 'unit-price))
-	 (pricewith-discount (if discount
-				 (- unit-price (/ (* unit-price discount) 100))
-				 ;;else
-				 unit-price)))
+  (let* ( ;;获取折扣率
+          (discount (slot-value order-item 'disc-rate))
+          ;;获取单价
+	        (unit-price (slot-value order-item 'unit-price))
+          ;;计算折扣价格
+	        (pricewith-discount
+            (if discount
+				      (- unit-price (/ (* unit-price discount) 100))
+				      ;;else
+				      unit-price)))
     pricewith-discount))
 
 

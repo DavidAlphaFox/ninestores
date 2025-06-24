@@ -8,7 +8,8 @@
     :documentation "value should be Y or N, followed by order instance and company instance"
   (let* ((vendor-order
            (get-vendor-order-instance
-             (slot-value order-instance 'row-id) vendor))
+             (slot-value order-instance 'row-id)
+             vendor))
 	        ;;(order-id (slot-value order-instance 'row-id))
           ;;得到客户信息
 	        (customer (get-customer order-instance))
@@ -94,7 +95,7 @@
 		[= [:fulfilled] "N"]
 		[= [:vendor-id] vendor-id]
 		[=[:order-id] order-id]]    :caching nil :flatp t ))))
-
+;;通过订单的ID和供应商ID，找到对应供应商的订单
 (defun get-vendor-order-instance (order-id vendor)
   (let ((vendor-id (slot-value vendor  'row-id)))
     (car (clsql:select 'dod-vendor-orders :where

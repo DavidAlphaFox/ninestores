@@ -2123,26 +2123,45 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 
 (defun com-hhub-transaction-vendor-order-setfulfilled ()
   (with-vend-session-check 
-	(let* ((id (hunchentoot:parameter "id"))
-	       (company-instance (hunchentoot:session-value :login-vendor-company))
-	       (order-instance (get-order-by-id id company-instance))
-	       (payment-mode (slot-value order-instance 'payment-mode))
-	       (customer (get-customer order-instance)) 
-	       (vendor (get-login-vendor))
-	       (wallet (get-cust-wallet-by-vendor customer vendor company-instance))
-	       (vendor-order-items (get-order-items-for-vendor-by-order-id  order-instance (get-login-vendor) ))
-	       (vorderitemstotal (get-order-items-total-for-vendor vendor  vendor-order-items))
-	       (params nil))
+	  (let* ((id (hunchentoot:parameter "id"))
+            ;;获得公司实例
+	          (company-instance (hunchentoot:session-value :login-vendor-company))
+            ;;获得公司下对应id的订单
+	          (order-instance (get-order-by-id id company-instance))
+            ;;获得该订单的付款模式
+	          (payment-mode (slot-value order-instance 'payment-mode))
+            ;;得到该订单的客户
+	          (customer (get-customer order-instance))
+            ;;得到供应商
+	          (vendor (get-login-vendor))
+            ;;得到客户的钱包
+	          (wallet (get-cust-wallet-by-vendor
+                      customer vendor company-instance))
+            ;;得到该订单中包含该供应商的货品
+	          (vendor-order-items
+              (get-order-items-for-vendor-by-order-id
+                order-instance
+                (get-login-vendor)))
+            ;;计算该供应商在此订单下货品的总价
+	          (vorderitemstotal
+              (get-order-items-total-for-vendor
+                vendor vendor-order-items))
+	          (params nil))
 
-	 (setf params (acons "uri" (hunchentoot:request-uri*)  params))
-	 (setf params (acons "company" company-instance params))
-	 (with-hhub-transaction "com-hhub-transaction-vendor-order-setfulfilled"  params   
-	   (progn (if (equal payment-mode "PRE")
-		      (unless (check-wallet-balance vorderitemstotal wallet)
-			(display-wallet-for-customer wallet "Not enough balance for the transaction.")))
-		  ;; We will make all the database changes in the background. 
-		  (set-order-fulfilled "Y" vendor  order-instance company-instance)
-		  (hunchentoot:redirect "/hhub/dodvendindex?context=pendingorders"))))))
+	    (setf params (acons "uri" (hunchentoot:request-uri*)  params))
+	    (setf params (acons "company" company-instance params))
+	    (with-hhub-transaction
+        "com-hhub-transaction-vendor-order-setfulfilled"
+        params
+	      (progn (if (equal payment-mode "PRE")
+                 ;;如果是预先充斥的客户，检查钱包是否有足够的金额
+		             (unless (check-wallet-balance vorderitemstotal wallet)
+			             (display-wallet-for-customer wallet
+                     "Not enough balance for the transaction.")))
+		      ;; We will make all the database changes in the background. 
+		      (set-order-fulfilled "Y" vendor  order-instance company-instance)
+          ;;重定向到待进行的订单页面
+		      (hunchentoot:redirect "/hhub/dodvendindex?context=pendingorders"))))))
 
 (defun display-wallet-for-customer (wallet-instance custom-message)
   (with-standard-vendor-page (:title "Wallet Display")

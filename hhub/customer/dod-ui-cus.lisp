@@ -2297,14 +2297,23 @@
 (defun dod-controller-cust-show-shopcart-readonly()
   (with-cust-session-check
     (with-mvc-ui-page "Customer Shopping Cart Final" createmodelforcustshowshopcartreadonly createwidgetsforcustshowshopcartreadonly :role :customer)))
-			   
+
 ; This is a pure function. 
-(defun get-order-items-total-for-vendor (vendor order-items) 
-  (let ((vendor-id (slot-value vendor 'row-id)))
-    (reduce #'+ (remove nil (mapcar (lambda (item)
-				      (let ((pricewith-discount (calculate-order-item-cost item))) 
-					(if (equal vendor-id (slot-value item 'vendor-id)) 
-					    pricewith-discount))) order-items)))))
+(defun get-order-items-total-for-vendor (vendor order-items)
+  (let ((vendor-id (slot-value vendor 'row-id))) ;;获取供应商的ID
+    ;;计算总价格
+    (reduce #'+ (remove nil
+                  ;;遍历所有商品
+                  (mapcar (lambda (item)
+                            ;;计算单个商品折价后的价格
+				                    (let ((pricewith-discount
+                                    (calculate-order-item-cost item)))
+                              ;;如果该商品的供应商ID和目标供应商ID相同
+                              ;;则返回计算后的价格
+					                    (if (equal vendor-id
+                                    (slot-value item 'vendor-id))
+					                      pricewith-discount)))
+                    order-items)))))
 
 (defun get-opref-items-total-for-vendor (vendor opref-items) 
  (let ((vendor-id (slot-value vendor 'row-id)))

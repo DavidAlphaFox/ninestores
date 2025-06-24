@@ -625,28 +625,34 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-hhub-transaction (name &optional params  &body body)
     :documentation "This is the Policy Enforcement Point for Nine Stores" 
-    `(let* ((transaction (get-ht-val ,name (hhub-get-cached-transactions-ht)))
-	    (uri (cdr (assoc "uri" params :test 'equal)))
-	    (returnlist (has-permission transaction ,params))
-	    (returnvalue (nth 0 returnlist))
-	    (exceptionstr (nth 1 returnlist))
-	    (redirecturl (format nil "/hhub/permissiondenied?message=~A" (hunchentoot:url-encode "Permission Denied"))))
+    `(let* ((transaction
+              (get-ht-val ,name (hhub-get-cached-transactions-ht)))
+	           (uri (cdr (assoc "uri" params :test 'equal)))
+             ;;检查权限是否可以进行操作
+	           (returnlist (has-permission transaction ,params))
+	           (returnvalue (nth 0 returnlist))
+	           (exceptionstr (nth 1 returnlist))
+	           (redirecturl (format nil "/hhub/permissiondenied?message=~A"
+                            (hunchentoot:url-encode "Permission Denied"))))
        (unless transaction
-	 (error 'hhub-abac-transaction-error :errstring (format nil "Did not find the transaction by name ~A. Create a new transaction and a related policy." ,name)))
-       
-       (logiamhere (format nil "In the transaction ~A" (slot-value transaction 'name)))
+	       (error 'hhub-abac-transaction-error :errstring
+           (format nil "Did not find the transaction by name ~A. Create a new transaction and a related policy." ,name)))
+       (logiamhere (format nil "In the transaction ~A"
+                     (slot-value transaction 'name)))
        (logiamhere (format nil "URI -  ~A" uri))
        (logiamhere (format nil "URI in DB  -  ~A" (slot-value transaction 'uri)))
-       ;; check for returnvalue to be T and the uri to match 
+       ;; check for returnvalue to be T and the uri to match
+       ;; 检查返回值是真，且事务的uri是匹配的，才可以进行事务操作
        (if (and returnvalue (>= (search (slot-value transaction 'uri) uri) 0))
-	   ,@body
-	   ;;else
-	   (progn 
-	     (logiamhere (format nil "Permission denied for transaction ~A. Error: ~A " (slot-value transaction 'trans-func) exceptionstr))
-	     ;;(setf (hunchentoot:return-code hunchentoot:*reply*) 500)
-	     (unless returnvalue
-	       (function (lambda ()
-		 (values redirecturl)))))))))
+	       ,@body
+	       ;;else
+	       (progn
+	         (logiamhere (format nil "Permission denied for transaction ~A. Error: ~A "
+                         (slot-value transaction 'trans-func) exceptionstr))
+	         ;;(setf (hunchentoot:return-code hunchentoot:*reply*) 500)
+	         (unless returnvalue
+	           (function (lambda ()
+		                     (values redirecturl)))))))))
 
 
 
