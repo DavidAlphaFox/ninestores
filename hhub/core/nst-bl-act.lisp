@@ -14,6 +14,9 @@
    (state
     :initarg :initial-state
     :accessor actor-state)
+   (actor-state-clean-callback
+    :initarg :state-clean-callback
+    :accessor actor-state-clean-callback)
    (stateful
     :initarg :stateful
     :reader actor-stateful)
@@ -123,13 +126,17 @@
 (defmethod destroy-actor ((actor nst-actor))
   "Stops the actor and cleans up resources."
   (stop-actor actor)
-  (with-slots (lock thread thread-state queue) actor
+  (with-slots (lock thread thread-state state queue actor-state-clean-callback) actor
     (bt:with-lock-held (lock)
       (when thread
 	(bt:destroy-thread thread)
 	(setf thread nil)
 	(setf thread-state :terminated)
-	(setf queue '())))))
+	(setf queue '())
+	(setf state nil)
+	(when (functionp actor-state-clean-callback)
+	  (actor-state-clean-callback actor)
+	  (setf actor-state-clean-callback nil))))))
 
 
 ;; ------------------------------------------

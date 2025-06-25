@@ -25,40 +25,39 @@ $(document).ready(function(){
 });
 						 
 	
-
-$(document).ready(function() {
-  $("#btnPushNotifications").click(function(event) {
-    if (isSubscribed) {
-      console.log("Unsubscribing...");
-      unsubscribe();
-    } else {
-      subscribe();
-    }
-  });
-
+$("#btnPushNotifications").click(function(event) {
   Notification.requestPermission().then(function(status) {
-    if (status === "denied") {
-      console.log(
-        "[Notification.requestPermission] The user has blocked notifications."
-      );
-      disableAndSetBtnMessage("Notification permission denied");
-    } else if (status === "granted") {
-      console.log(
-        "[Notification.requestPermission] Initializing service worker."
-      );
+    if (status === "granted") {
+      console.log("Permission granted");
       initialiseServiceWorker();
+      subscribe(); // continue with subscription
+    } else {
+      console.log("Permission denied or dismissed");
+      disableAndSetBtnMessage("Notification permission denied");
     }
+      if (isSubscribed) {
+	  console.log("Unsubscribing...");
+	  unsubscribe();
+      } else {
+	  subscribe();
+      }
+
   });
 });
+
 
 function initialiseServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker
-      .register(serviceWorkerName)
-      .then(handleSWRegistration);
+	  .register(serviceWorkerName)
+	  .then(handleSWRegistration)
+	  .catch(function (error){
+	      console.error("Service Worker registration failed:", error);
+	      disableAndSetBtnMessage("SW registration failed");
+	  });
   } else {
-    console.log("Service workers aren't supported in this browser.");
-    disableAndSetBtnMessage("Service workers unsupported");
+      console.log("Service workers aren't supported in this browser.");
+      disableAndSetBtnMessage("Service workers unsupported");
   }
 }
 
@@ -87,7 +86,7 @@ function checkPushSubscription(){
 			.getSubscription()
 			.then(function(subscription) {
 			    if (!subscription) {
-				console.log("Not yet subscribed to Push");
+				console.log("No subscription found");
 				isSubscribed = false;
 				makeButtonSubscribable();
 			    } else {
@@ -110,7 +109,7 @@ function checkPushSubscription(){
     }).done(function(){
 	console.log("Get Vendor Subscription - Done");
     }).fail(function(){
-	console.log("Get Vendor Subscription - Failed"); 
+	console.log("Get Vendor Subscription - Failed" + jqxhr.responseText); 
     }).always(function(){
 	console.log("Get Vendor Subscription - Done Done"); 
     }); 
@@ -218,7 +217,7 @@ function sendSubscriptionToServer(endpoint, key, auth) {
 	success: function(response) {
 	    console.log("Subscribed successfully! " + JSON.stringify(response));
 	    console.log("publickey " + encodedKey);
-	    console.log("auth " + encodedauth)
+	    console.log("auth " + encodedAuth)
 	},
     dataType: "json"
     });

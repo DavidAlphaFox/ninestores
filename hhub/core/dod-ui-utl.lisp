@@ -3,6 +3,42 @@
 (clsql:file-enable-sql-reader-syntax)
 
 
+(defun nst-generic-login-with-password (persona formaction redirectonfailure)
+  (handler-case 
+      (progn  
+	(if (equal (caar (clsql:query "select 1" :flatp nil :field-names nil :database *dod-db-instance*)) 1) T)      
+	(if (is-dod-session-valid?)
+	    (hunchentoot:redirect redirectonfailure))
+	(with-no-navbar-page-v2 (format nil "Welcome ~A" persona)
+	  (with-html-div-row
+	    (with-html-div-col-12
+	      (with-html-card "/img/logo.png" "" (format nil "~A Login" persona) ""
+		(:form :class "form-custsignin" :role "form" :method "POST" :action formaction :data-toggle "validator"
+		       (:div :class "form-group"
+			     (:input :class "form-control" :name "phone" :placeholder "Enter RMN. Ex: 9999999999" :type "number" :required "true"))
+		       (:div :class "form-group"
+			     (:input :class "form-control" :name "password" :placeholder "password=Welcome1" :type "password"  :required "true"))
+		       (:div :class "form-group"
+			     (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Login")))
+		(:a :data-toggle "modal" :data-target (format nil "#dascustforgotpass-modal")  :href "#"  "Forgot Password?")
+		(modal-dialog (format nil "dascustforgotpass-modal") "Forgot Password?" (modal.customer-forgot-password))
+		(hhub-html-page-footer))))))
+    (clsql:sql-database-data-error (condition)
+      (if (equal (clsql:sql-error-error-id condition) 2013 ) (progn
+							       (stop-das) 
+							       (start-das)
+							       (hunchentoot:redirect "/hhub/hhubcustloginv2"))))))
+
+
+(defun safe-read-from-string (string &optional default-value)
+  "Attempts to read a Lisp expression from a string, returning a default value if parsing fails."
+  (handler-case
+      (let ((trimmed-string (string-trim '(#\space) string)))
+        (if (string= trimmed-string "") ; Check for empty string
+            default-value
+            (read-from-string trimmed-string)))
+    (error () ; Catch any error during read-from-string
+      default-value)))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun displaystorepickupwidget (address)
@@ -74,7 +110,33 @@
 						 (parenscript:chain element (add-event-listener "submit" (lambda (e)
 													   (parenscript:chain e (prevent-default))
 													   (let ((target-form (parenscript:@ e target)))
+													     ;; if formname is fileuploadform then return as we are having a
+													     ;; different event function to handle this. 
+													     (if (= (parenscript:chain target-form name) 'file-upload-form) return)
 													     (submitformandredirect target-form)))))))))))))))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)     
+  (defmacro with-catch-file-upload-event (id  &body body)
+    :documentation "Arguments: NIL. This macro is used where there are many forms having submit events in a page and we want to catch them all when the event is propogated to the div level."    
+      `(cl-who:with-html-output (*standard-output* nil) 
+	 (:div :id ,id
+	       ,@body)
+	 (submitfileuploadevent-js (format nil "#~A" ,id)))))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun submitfileuploadevent-js (id-bind-element)
+    (cl-who:with-html-output (*standard-output* nil)
+      (:script :type "text/javascript"
+	       (cl-who:str
+		(parenscript:ps
+		 (parenscript:chain ($ "document") 
+				    (ready (lambda ()
+					     (let ((element  (parenscript:chain document (query-selector (parenscript:lisp id-bind-element))))))
+					     (if (not (null element))
+						 (parenscript:chain element (add-event-listener "submit" (lambda (e)
+													   ;; We stop event propagation here as there is another submit event on top of this. 
+													   (parenscript:chain e (stop-propagation))
+													   (submitfileuploadevent e))))))))))))))
 
 
 
@@ -548,6 +610,13 @@
   (defmacro with-no-navbar-page (title &body body)
     `(with-standard-page-template ,title (lambda () ()) ,@body)))
 
+(defun kill-threads-by-prefix (prefix)
+  "Kills all threads whose names start with PREFIX."
+  (dolist (thread (bt:all-threads))
+    (let ((name (bt:thread-name thread)))
+      (when (and name (search prefix name))
+        (format t "Killing thread: ~A~%" name)
+        (bt:destroy-thread thread)))))
 
 (defun print-thread-info ()
 :description "This function prints information about all threads" 
@@ -670,13 +739,14 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-html-dropdown (name kvhash selectedkey)
+    (let ((id (format nil "id~A" name)))
     `(cl-who:with-html-output (*standard-output* nil)
-       (:select :class "form-control" :name ,name 
+       (:select :class "form-control" :id ,id :name ,name 
 		(maphash (lambda (key value) 
 			   (if (equal key  ,selectedkey) 
 			       (cl-who:htm (:option :selected "true" :value key (cl-who:str value)))
 					;else
-		     (cl-who:htm (:option :value key (cl-who:str value))))) ,kvhash)))))
+		     (cl-who:htm (:option :value key (cl-who:str value))))) ,kvhash))))))
   
 
 
@@ -718,6 +788,10 @@ individual tiles. It also supports search functionality by including the searchr
 	 (:vendor (display-vendor-page-with-widgets ,pagetitle widgets))
 	 (:compadmin (display-compadmin-page-with-widgets ,pagetitle widgets))
 	 (:superadmin (display-superadmin-page-with-widgets ,pagetitle widgets))))))
+
+(defun createmodelwithnildata ()
+  (function (lambda ()
+    (values nil))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-mvc-binary-file (createmodelfunc createwidgetsfunc)
@@ -816,10 +890,10 @@ individual tiles. It also supports search functionality by including the searchr
   (defmacro with-html-card (cardimage cardimagealt cardtitle cardtext  &body body)
     :documentation "A HTML bootstrap 5.x card"
     `(cl-who:with-html-output (*standard-output* nil) 
-       (:div :class "card" 
-	     (:img :src ,cardimage  :class "card-img-top" :alt ,cardimagealt :style "width: 100px; height: 100px; border-radius: 50%;")
-	     (:div :class "card-body"
-		   (:h5 :class "card-title" ,cardtitle)
+       (:div :class "card"
+	     (:img :src ,cardimage :class "rounded-circle mx-auto d-block mt-3" :alt ,cardimagealt :style "width: 100px; height: 100px;")
+	     (:div :class "card-body text-center"
+		   (:h3 :class "card-title" ,cardtitle)
 		   (:p :class "card-text" ,cardtext)
 		   ,@body)))))
 
@@ -905,7 +979,7 @@ individual tiles. It also supports search functionality by including the searchr
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-html-input-number (name label placeholder  value min max brequired validation-error-msg tabindex &body other-attributes)
-    (let ((textid (format nil "id~A~A" name (hhub-random-password 3))))
+    (let ((textid (format nil "id~A" name)))
     `(cl-who:with-html-output (*standard-output* nil)
        (:div :class "form-group"
 	     (:label :for ,textid ,label)
@@ -914,7 +988,7 @@ individual tiles. It also supports search functionality by including the searchr
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-html-input-text (name label placeholder  value brequired validation-error-msg tabindex &body other-attributes)
-    (let ((textid (format nil "id~A~A" name (hhub-random-password 3))))
+    (let ((textid (format nil "id~A" name)))
     `(cl-who:with-html-output (*standard-output* nil)
        (:div :class "form-group"
 	     (:label :for ,textid ,label)
@@ -924,11 +998,12 @@ individual tiles. It also supports search functionality by including the searchr
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-html-input-text-readonly (name label placeholder  value brequired validation-error-msg tabindex &body other-attributes)
-    `(cl-who:with-html-output (*standard-output* nil)
-       (:div :class "form-group"
-	     (:label :for ,name ,label)
-	     (:input :class "form-control"  :type "text" :id ,name :name ,name :placeholder ,placeholder :required ,brequired :value ,value :readonly "true" :tabindex ,tabindex :data-error  ,validation-error-msg ,@other-attributes)
-	     (:div :class "help-block with-errors")))))
+    (let ((textid (format nil "id~A" name)))
+      `(cl-who:with-html-output (*standard-output* nil)
+	 (:div :class "form-group"
+	       (:label :for ,name ,label)
+	       (:input :class "form-control"  :type "text" :id ,textid :name ,name :placeholder ,placeholder :required ,brequired :value ,value :readonly "true" :tabindex ,tabindex :data-error  ,validation-error-msg ,@other-attributes)
+	       (:div :class "help-block with-errors"))))))
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
@@ -974,7 +1049,7 @@ individual tiles. It also supports search functionality by including the searchr
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-html-custom-checkbox (name value placeholder bchecked &body body)
-    (let ((id (format nil "id~A~d" name (random 333))))
+    (let ((id (format nil "id~A" name)))
     `(cl-who:with-html-output (*standard-output* nil)
        (:div :class "custom-control custom-switch"
 	     (if ,bchecked

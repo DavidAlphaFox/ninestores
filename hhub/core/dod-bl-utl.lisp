@@ -2,6 +2,103 @@
 (in-package :hhub)
 (clsql:file-enable-sql-reader-syntax)
 
+
+;; Example 1: Creating a branch for a UI feature with an identifier
+;; This is for the UI layer, adding a new OTP-based login using HTMX
+;; (generate-branch-name
+;; :scope "ui"                 ;; Area of the codebase — e.g., "core", "ui", "api", etc.
+;; :type "feat"                ;; Type of work — e.g., "feat", "fix", "chore", etc.
+;; :id "otp2"                  ;; Optional ticket/issue ID or short code (e.g., JIRA/issue number)
+;; :desc "htmx integration")   ;; Description of the work
+;; => "ui/feat/otp2-htmx-integration"
+;; (generate-branch-name :scope "ui" :type "feat" :id "otp2" :desc "htmx integration")
+;; (generate-branch-name :scope "core" :type "fix" :desc "login crash")
+
+(defun generate-branch-name (&key scope type id desc (max-length 50))
+  "Generate a validated Git branch name: scope/type/id-desc."
+  (let* ((allowed-scopes '("cus" "ven" "cad" "super" "core" "ui" "api" "lisp" "infra" "test" "doc"))
+         (allowed-types  '("feat" "fix" "chore" "refactor" "perf" "test" "docs" "hotfix"))
+         (scope (string-downcase (string scope)))
+         (type (string-downcase (string type)))
+         (id (when id (string-downcase (string id))))
+         (desc (string-downcase (string desc)))
+         (safe-desc (substitute #\- #\Space desc)))
+
+    ;; Validate scope
+    (unless (member scope allowed-scopes :test #'string=)
+      (error "Invalid scope: ~A. Allowed: ~{~A~^, ~}" scope allowed-scopes))
+
+    ;; Validate type
+    (unless (member type allowed-types :test #'string=)
+      (error "Invalid type: ~A. Allowed: ~{~A~^, ~}" type allowed-types))
+
+    ;; Generate base name
+    (let ((branch-name
+            (if id
+                (format nil "~A/~A/~A-~A" scope type id safe-desc)
+                (format nil "~A/~A/~A" scope type safe-desc))))
+      ;; Enforce max length
+      (if (> (length branch-name) max-length)
+          (error "Branch name too long (~A chars): ~A" (length branch-name) branch-name)
+          branch-name))))
+
+(defun generate-sku (product-name description qty-per-unit unit-of-measure)
+  "Generate an SKU from product information by taking 2 chars from each word.
+  
+  Arguments:
+  - PRODUCT-NAME: String (e.g., \"Organic Apples\")
+  - DESCRIPTION: String or NIL (e.g., \"Red Delicious\")
+  - QTY-PER-UNIT: Number (e.g., 1, 100, 2.5)
+  - UNIT-OF-MEASURE: String (e.g., \"KG\", \"G\", \"L\")
+  
+  Returns:
+  - A generated SKU string in format NN-DD-QTY-UOM-RANDOM
+    Where NN is from product name words, DD from description words
+  "
+  (flet ((process-words (string max-words)
+           (when string
+             (let ((words (remove-if #'uiop:emptyp 
+                                   (split-sequence:split-sequence #\Space string))))
+               (subseq (apply #'concatenate 'string
+                             (mapcar (lambda (word) 
+                                       (subseq (string-upcase word) 0 (min 2 (length word))))
+                                     words))
+                       0 (* 2 (min max-words (length words))))))))
+    
+    (let* ((name-code (process-words product-name 3))  ; Take max 3 words from name
+           (desc-code (process-words description 2))   ; Take max 2 words from description
+           (random-num (+ 1000 (random 9000))))
+      
+      (format nil "~A~@[-~A~]-~A~A-~D"
+              name-code
+              desc-code
+              qty-per-unit
+              (string-upcase unit-of-measure)
+              random-num))))
+
+(defun read-yaml-file (filepath)
+  "Read a YAML file and return its parsed content."
+  (let ((contents (hhub-read-file filepath)))
+    (yaml:parse contents)))
+
+(defun write-yaml-file (filepath data)
+  "Write a Lisp data structure to a YAML file."
+  (with-open-file (stream filepath :direction :output :if-exists :supersede)
+    (yaml:emit data *standard-output*)))
+
+(defun update-invoice-settings (yaml-file output-file)
+  "Read, modify, and save YAML settings."
+  (let ((data (read-yaml-file yaml-file)))
+    ;; Update specific settings
+    (setf (gethash "default_currency" (gethash "invoice_general_settings" (gethash "invoice_settings" data))) "INR")
+    (setf (gethash "date_format" (gethash "invoice_general_settings" (gethash "invoice_settings" data))) "DD/MM/YYYY")
+    ;; Save the updated data
+    (write-yaml-file output-file data)))
+
+;; Use the function
+;;(update-invoice-settings "config.yaml" "updated_config.yaml")
+
+
 (defun generatepdf (inputhtmlfile outpdffilename)
   (let* ((filename (format nil "~A~A.pdf" outpdffilename (get-universal-time)))
 	 (filepath (format nil "~A/temp/~A" *HHUBRESOURCESDIR* filename))
@@ -10,12 +107,16 @@
     (sb-ext:run-program "/bin/sh" (list "-c" pdfcmd) :input nil :output *standard-output*)
     filename))
 
+
 (defun downloadhtmlfile (url)
   (let* ((filename (format nil "download~A.html" (get-universal-time)))
 	 (filepath (format nil "~A/temp/~A" *HHUBRESOURCESDIR* filename))
 	 (command (format nil "wget -O ~A ~A" filepath url)))
     (sb-ext:run-program "/bin/sh" (list "-c" command) :input nil :output *standard-output*)
     filename))
+
+
+
 
 (defun convert-number-to-words-INR (number)
   (let* ((ones (make-array '(10) :initial-contents (list ""  "one"  "two"  "three"  "four"  "five"  "six"  "seven"  "eight"  "nine")))
@@ -466,7 +567,12 @@ corresponding universal time."
   (ironclad:byte-array-to-hex-string (ironclad:digest-sequence :sha1 (ironclad:ascii-string-to-byte-array plaintext)))) 
 
 (defun create-digest-md5 (plaintext)
-  (ironclad:byte-array-to-hex-string (ironclad:digest-sequence :md5 (ironclad:ascii-string-to-byte-array plaintext)))) 
+  (ironclad:byte-array-to-hex-string (ironclad:digest-sequence :md5 (ironclad:ascii-string-to-byte-array plaintext))))
+
+(defun create-md5-from-list (items)
+  "Takes a list of strings, joins them with commas, and returns the MD5 digest."
+  (let ((joined (format nil "~{~A~^,~}" items)))
+    (create-digest-md5 joined)))
 
 (defun decrypt (ciphertext key)
   (let ((cipher (get-cipher key))
