@@ -15,27 +15,27 @@
 		       [= [:tenant-id] tenant-id]
 		       [= [:transaction-id] trans-id]]    :caching *dod-database-caching* :flatp t ))))
 
-
+;; 选定指定客户对指定公司的转账
 (defun select-payment-trans-by-customer (customer company)
   (let ((customer-id (slot-value customer 'row-id))
-	(tenant-id (slot-value company 'row-id)))
+	       (tenant-id (slot-value company 'row-id)))
     (clsql:select 'dod-payment-transaction  :where
-		[and [= [:deleted-state] "N"]
-		[= [:tenant-id] tenant-id]
-		[= [:customer-id] customer-id]] :limit 20
-		:caching *dod-database-caching* :flatp t )))
-  
+		  [and [= [:deleted-state] "N"]
+		  [= [:tenant-id] tenant-id]
+		  [= [:customer-id] customer-id]] :limit 20
+		  :caching *dod-database-caching* :flatp t )))
 
+;; 只用租赁下的供应商转账数据
 (defun select-payment-trans-by-vendor (customer vendor company)
   (let ((customer-id (slot-value customer 'row-id))
-	(vendor-id (slot-value vendor 'row-id))
-	(tenant-id (slot-value company 'row-id)))
+	       (vendor-id (slot-value vendor 'row-id))
+	       (tenant-id (slot-value company 'row-id)))
     (clsql:select 'dod-payment-transaction  :where
-		[and [= [:deleted-state] "N"]
-		[= [:tenant-id] tenant-id]
-		[= [:vendor-id] vendor-id]
-		[= [:customer-id] customer-id]] :limit 20
-		:caching *dod-database-caching* :flatp t )))
+		  [and [= [:deleted-state] "N"]
+		  [= [:tenant-id] tenant-id]
+		  [= [:vendor-id] vendor-id]
+		  [= [:customer-id] customer-id]] :limit 20
+		  :caching *dod-database-caching* :flatp t )))
   
 
 
