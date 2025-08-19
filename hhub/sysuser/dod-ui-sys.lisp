@@ -1,5 +1,5 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-(in-package :hhub)
+(in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 (defvar *logged-in-users* nil)
@@ -7,9 +7,13 @@
 
 (defun hhub-controller-permission-denied ()
   (let ((message (hunchentoot:parameter "message")))
-    (with-no-navbar-page "Permission Denied"
-      (with-html-div-row (:h4 "Permission Denied"))
-      (html-back-button)
+    (with-no-navbar-page-v2 "Permission Denied"
+      (:div :class "card"
+	    (:img :src "/img/permissiondenied.jpg"  :class "rounded-lg  mx-auto d-block mt-3" :alt "Standard Shipping" :style "width: 300px; height: 300px;")
+	    (:div :class "card-body text-center"
+		  (:h2 :class "card-title" "Permission Denied")
+		  (:h3 :class "card-text"
+		       (cl-who:str (html-back-button)))))
       (jscript-displayerror message))))
 
 
@@ -21,14 +25,18 @@
     (with-no-navbar-page-v2  "OTP Page"
       (:br)
       (:div :class "account-wall" :align "center"
-	    (with-html-card "/img/logo.png" "" "" (cl-who:str (format nil "OTP has been sent to your phone ~A" (concatenate 'string "xxxxx" (subseq phone 6))))
-	      
+	    (with-html-card
+		(:title "OTP Login Page"
+		 :image-src "/img/logo.png"
+		 :image-alt "OTP Login to Nine Stores"
+		 :image-style "width: 200px; height: 200px;")
+	      (:h3 (cl-who:str (format nil "OTP has been sent to your phone ~A" (concatenate 'string "xxxxx" (subseq phone 6)))))
 	      (with-html-form-having-submit-event  "form-hhubotppage" "hhubotpsubmitaction" 
 		(:div :id "withCountDownTimerExpired"
 		      (with-html-input-text-hidden "persona" persona)
 		      (with-html-input-text-hidden "purpose" purpose)
 		      (with-html-input-text-hidden "phone" phone)
-		      (with-html-input-password "otp" "" "Enter OTP" nil T "Please enter OTP" "1")
+		      (with-html-input-text "otp" "One Time Password" "Enter OTP" nil T "Please enter OTP" "1" :autocomplete "one-time-code" :inputmode "numeric" :pattern "[0-9]*" :maxlength "6")
 		      (:p :id "withCountDownTimer" :style "color: crimson;")
 		      (:div :class "form-group"
 			    (:button :class "submit center-block btn btn-primary btn-block" :type "submit" "Send OTP"))))
@@ -43,9 +51,9 @@
       (:script "window.onload = function() {countdowntimer(0,0,2,0);}"))))
 
 (defun dod-controller-otp-submit-action ()
-  (with-mvc-redirect-ui createmodelforotpsubmitaction createwidgetsforgenericredirect))
+  (with-mvc-redirect-ui #'create-model-for-otpsubmitaction #'create-widgets-for-genericredirect))
 
-(defun createmodelforotpsubmitaction ()
+(defun create-model-for-otpsubmitaction ()
   (let* ((otp (hunchentoot:parameter "otp"))
 	 (phone (hunchentoot:parameter "phone"))
 	 (persona (hunchentoot:parameter "persona"))
@@ -480,9 +488,9 @@
 
 (defun com-hhub-transaction-sadmin-home () 
   (with-opr-session-check
-    (with-mvc-ui-page "Welcome Super Administrator" createmodelforsadminhome createwidgetsforsadminhome :role :superadmin)))
+    (with-mvc-ui-page "Welcome Super Administrator" #'create-model-for-sadminhome #'create-widgets-for-sadminhome :role :superadmin)))
 
-(defun createmodelforsadminhome ()
+(defun create-model-for-sadminhome ()
   (let ((companies (hhub-get-cached-companies))
 	(params nil))
     (setf params (acons "username" (get-login-username) params))
@@ -491,7 +499,7 @@
       (function (lambda ()
 	(values companies))))))
 
-(defun createwidgetsforsadminhome (modelfunc)
+(defun create-widgets-for-sadminhome (modelfunc)
   (multiple-value-bind (companies) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)   
@@ -623,10 +631,10 @@
 	    (hunchentoot:redirect "/hhub/opr-login.html"))))))
 
 (defun com-hhub-transaction-sadmin-login ()
-  (let ((uri (with-mvc-redirect-ui createmodelforsadminlogin createwidgetsforgenericredirect)))
+  (let ((uri (with-mvc-redirect-ui #'create-model-for-sadminlogin #'create-widgets-for-genericredirect)))
     (format nil "~A" uri)))
 
-(defun createmodelforsadminlogin ()
+(defun create-model-for-sadminlogin ()
  (let  ((uname (hunchentoot:parameter "username"))
 	(passwd (hunchentoot:parameter "password"))
 	(cname (hunchentoot:parameter "company"))
@@ -647,7 +655,7 @@
 
 
 ;;;;;;;;;;;;;;com-hhub-transaction-cad-logout;;;;;;;;;;;;;;;
-(defun createmodelforsadminlogout ()
+(defun create-model-for-sadminlogout ()
   (let ((username (get-login-username))
 	(redirectlocation "/hhub/opr-login.html"))
     (progn
@@ -658,7 +666,7 @@
 	redirectlocation)))))
 
 (defun dod-controller-logout ()
-  (let ((uri (with-mvc-redirect-ui createmodelforsadminlogout createwidgetsforgenericredirect)))
+  (let ((uri (with-mvc-redirect-ui #'create-model-for-sadminlogout #'create-widgets-for-genericredirect)))
     (hunchentoot:redirect (format nil "~A" uri))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  
 

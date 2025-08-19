@@ -1,5 +1,5 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-(in-package :hhub)
+(in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 
@@ -12,7 +12,11 @@
 	(with-no-navbar-page-v2 (format nil "Welcome ~A" persona)
 	  (with-html-div-row
 	    (with-html-div-col-12
-	      (with-html-card "/img/logo.png" "" (format nil "~A Login" persona) ""
+	      (with-html-card
+		  (:title "Login"
+		   :image-src "/img/logo.png"
+		   :image-alt (format nil "~A Login" persona)
+		   :image-style "width: 200px; height: 200px;")
 		(:form :class "form-custsignin" :role "form" :method "POST" :action formaction :data-toggle "validator"
 		       (:div :class "form-group"
 			     (:input :class "form-control" :name "phone" :placeholder "Enter RMN. Ex: 9999999999" :type "number" :required "true"))
@@ -43,10 +47,13 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun displaystorepickupwidget (address)
     (cl-who:with-html-output (*standard-output* nil)
-      (with-html-div-row 
-	(:div :align "right" :class "stampbox rotated" "Store Pickup")
+      (with-html-card
+	  (:title "Pickup In Store"
+	   :image-src "/img/PickupInStore.jpg" 
+	   :image-alt "Pickup In Store"
+	   :image-style "width: 100px; height: 100px;")
 	(:p (:strong "NOTE: This order needs to be picked up from store."))
-	(if address (cl-who:htm (:div (:span (cl-who:str (format nil "&nbsp;Store Address:~A" address ))))))))))
+	(:p (:span (cl-who:str (format nil "&nbsp;Store Address:~A" address ))))))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun with-html-collapse (collapseid listcollapseitemsfuncs) 
@@ -443,7 +450,8 @@
 		;; js files related to bootstrap and jquery. Jquery must come first.
 		(:script :src "https://ajax.googleapis.com/ajax/libs/jquery/3.7.0/jquery.min.js" :integrity "sha256-2Pmvv0kuTBOenSvLm6bvfBSSHrUJ+3A7x6P5Ebd07/g=" :crossorigin "anonymous")
 		(:script :src "https://ajax.googleapis.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js" :integrity "sha256-lSjKY0/srUM9BE3dPm+c4fBo1dky2v27Gdjm2uoZaL0=" :crossorigin "anonymous")
-		(:script :src "/js/spin.min.js")
+		;;(:script :src "/js/spin.min.js")
+		(:script :src "/js/nine-spinner.js")
 		(:script :src "https://www.google.com/recaptcha/api.js")
 		(:script :src "https://cdnjs.cloudflare.com/ajax/libs/1000hz-bootstrap-validator/0.11.9/validator.min.js"))
 		;; header completes here.
@@ -453,7 +461,7 @@
 		       (:div :id "hhub-error" :class "hhub-error-alert" :style "display:none;" )
 		       (:div :id "hhub-success" :class "hhub-success-alert" :style "display:none;")
 		       (:div :id "busy-indicator")
-		       (:script :src "/js/hhubbusy.js")
+		       ;;(:script :src "/js/hhubbusy.js")
 		       (if hunchentoot:*session* (,nav-func)) 
 		       (:div :class "container-fluid" :style "background-color: white; min-height: calc(100vh - 50px);" :role "main" 
 			     (:div :class "sidebar-nav" 
@@ -492,7 +500,8 @@
 		;; js files related to bootstrap and jquery. Jquery must come first. 
 		(:script :src "https://code.jquery.com/jquery-3.5.1.min.js" :integrity "sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" :crossorigin "anonymous")
 		(:script :src "https://ajax.googleapis.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js" :integrity "sha256-lSjKY0/srUM9BE3dPm+c4fBo1dky2v27Gdjm2uoZaL0=" :crossorigin "anonymous")
-		(:script :src "/js/spin.min.js")
+		;;(:script :src "/js/spin.min.js")
+		(:script :src "/js/nine-spinner.js")
 		;;(:script :src "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js")
 		(:script :src "/js/bs5.3/js/bootstrap.bundle.min.js")
 		(:script :src "https://www.google.com/recaptcha/api.js")
@@ -504,7 +513,7 @@
 		      (:div :id "hhub-error" :class "hhub-error-alert" :style "display:none;" )
 		      (:div :id "hhub-success" :class "hhub-success-alert" :style "display:none;")
 		      (:div :id "busy-indicator")
-		      (:script :src "/js/hhubbusy.js")
+		      ;;(:script :src "/js/hhubbusy.js")
 		      (if hunchentoot:*session* (,nav-func)) 
 		      (:div :class "container" :style "background-color: white; min-height: calc(100vh - 100px);" 
 			    (:div :id "hhubmaincontent"
@@ -542,7 +551,8 @@
 		;; js files related to bootstrap and jquery. Jquery must come first. 
 		(:script :src "https://code.jquery.com/jquery-3.5.1.min.js" :integrity "sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" :crossorigin "anonymous")
 		(:script :src "https://ajax.googleapis.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js" :integrity "sha256-lSjKY0/srUM9BE3dPm+c4fBo1dky2v27Gdjm2uoZaL0=" :crossorigin "anonymous")
-		(:script :src "/js/spin.min.js")
+		;;(:script :src "/js/spin.min.js")
+		(:script :src "/js/nine-spinner.js")
 		(:script :src "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js")
 		;;(:script :src "/js/bs5.3/js/bootstrap.bundle.min.js")
 		(:script :src "https://www.google.com/recaptcha/api.js")
@@ -554,7 +564,7 @@
 		       (:div :id "hhub-error" :class "hhub-error-alert" :style "display:none;" )
 		       (:div :id "hhub-success" :class "hhub-success-alert" :style "display:none;" )
 		       (:div :id "busy-indicator")
-		       (:script :src "/js/hhubbusy.js")
+		       ;;(:script :src "/js/hhubbusy.js")
 		       ;;
 					;(if (is-dod-cust-session-valid?) (with-customer-navigation-bar))
 		       (when hunchentoot:*session*
@@ -779,36 +789,37 @@ individual tiles. It also supports search functionality by including the searchr
 ;; This macro will be used for the MVC pattern on the UI display of pages. We need
 ;; to pass the model generating and view generating functions and specify for which persona this request is for.
 ;; currently we support customer and vendor roles.
+
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-mvc-ui-page (pagetitle createmodelfunc createwidgetsfunc &key role)
-    `(let* ((modelfunc (,createmodelfunc))
-	    (widgets (,createwidgetsfunc modelfunc)))
+    `(let* ((modelfunc (funcall ,createmodelfunc))
+	    (widgets (funcall ,createwidgetsfunc modelfunc)))
        (case ,role
 	 (:customer (display-customer-page-with-widgets ,pagetitle widgets))
 	 (:vendor (display-vendor-page-with-widgets ,pagetitle widgets))
 	 (:compadmin (display-compadmin-page-with-widgets ,pagetitle widgets))
 	 (:superadmin (display-superadmin-page-with-widgets ,pagetitle widgets))))))
 
-(defun createmodelwithnildata ()
+
+(defun create-model-withnildata ()
   (function (lambda ()
     (values nil))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-mvc-binary-file (createmodelfunc createwidgetsfunc)
-    `(let* ((modelfunc (,createmodelfunc))
-	    (widgets (,createwidgetsfunc modelfunc)))
+    `(let* ((modelfunc (funcall ,createmodelfunc))
+	    (widgets (funcall ,createwidgetsfunc modelfunc)))
        (loop for widget in widgets do 
 	 (funcall widget)))))
- 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-mvc-redirect-ui (createmodelfunc createwidgetsfunc)
-    `(let* ((modelfunc (,createmodelfunc))
-	    (widgets (,createwidgetsfunc modelfunc)))
+    `(let* ((modelfunc (funcall ,createmodelfunc))
+	    (widgets (funcall ,createwidgetsfunc modelfunc)))
        (funcall (nth 0 widgets)))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
-  (defun createwidgetsforgenericredirect (modelfunc)
+  (defun create-widgets-for-genericredirect (modelfunc)
     (multiple-value-bind (redirectlocation) (funcall modelfunc)
       (let ((widget1 (function (lambda ()
 		       redirectlocation))))
@@ -816,8 +827,8 @@ individual tiles. It also supports search functionality by including the searchr
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-mvc-ui-component (createwidgetsfunc createmodelfunc &rest modelargs)
-    `(let* ((modelfunc (,createmodelfunc ,@modelargs))
-	    (widgets (,createwidgetsfunc modelfunc)))
+    `(let* ((modelfunc (funcall ,createmodelfunc ,@modelargs))
+	    (widgets (funcall ,createwidgetsfunc modelfunc)))
        (loop for widget in widgets do 
 	 (funcall widget)))))
  
@@ -849,10 +860,10 @@ individual tiles. It also supports search functionality by including the searchr
 
 (defun html-back-button ()
   :documentation "HTML Back button"
-  `(cl-who:with-html-output-to-string (*standard-output* nil ) 
+  (cl-who:with-html-output-to-string (*standard-output* nil ) 
      (with-html-div-row
        (with-html-div-col 
-	 (:a :class "btn btn-primary" :onclick "window.history.back();"  :role "button" :href "#" (:i :class "bi bi-arrow-left"))))))
+	 (:a :class "btn btn-primary" :onclick "window.history.back();"  :role "button" :href "#" (:i :class "fa-solid fa-left-long"))))))
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -886,17 +897,22 @@ individual tiles. It also supports search functionality by including the searchr
 		,@body)))))
 
 
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (defmacro with-html-card (cardimage cardimagealt cardtitle cardtext  &body body)
-    :documentation "A HTML bootstrap 5.x card"
-    `(cl-who:with-html-output (*standard-output* nil) 
-       (:div :class "card"
-	     (:img :src ,cardimage :class "rounded-circle mx-auto d-block mt-3" :alt ,cardimagealt :style "width: 100px; height: 100px;")
-	     (:div :class "card-body text-center"
-		   (:h3 :class "card-title" ,cardtitle)
-		   (:p :class "card-text" ,cardtext)
-		   ,@body)))))
 
+(defmacro with-html-card ((&key title image-src image-alt (image-style "") (image-classes '("rounded-circle" "mx-auto" "d-block" "mt-3")) (card-classes '("card")) (body-classes '("card-body" "text-center"))) &body cardbody)
+  "A HTML Bootstrap 5.x card generator macro."
+  (let ((image-classes-str (if (listp image-classes) (format nil "~{~A~^ ~}" image-classes) image-classes))
+        (card-classes-str (if (listp card-classes) (format nil "~{~A~^ ~}" card-classes) card-classes))
+        (body-classes-str (if (listp body-classes) (format nil "~{~A~^ ~}" body-classes) body-classes)))
+    `(cl-who:with-html-output (*standard-output* nil)
+       (:div :class ,card-classes-str
+             ,(when image-src
+                `(:img :src ,image-src
+                       :class ,image-classes-str
+                       :alt ,image-alt
+                       :style ,image-style))
+             (:div :class ,body-classes-str
+                   (:h3 :class "card-title" ,title)
+                   (:p :class "card-text" ,@cardbody))))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-html-div-row ( &body body) 

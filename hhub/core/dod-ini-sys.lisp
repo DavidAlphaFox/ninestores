@@ -1,5 +1,5 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-(in-package :hhub)
+(in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 
@@ -57,7 +57,7 @@
 (defvar *PAYGATEWAYRETURNURL* "https://www.ninestores.in/hhub/custpaymentsuccess")
 (defvar *PAYGATEWAYCANCELURL* "https://www.ninestores.in/hhub/custpaymentcancel")
 (defvar *PAYGATEWAYFAILUREURL* "https://www.ninestores.in/hhub/custpaymentfailure")
-(defvar *HHUBRESOURCESDIR* "/data/www/public/img")
+(defvar *HHUBRESOURCESDIR* "/data/www/ninestores.in/public/img")
 (defvar *HHUBDEFAULTPRDIMG* "HHubDefaultPrdImg.png")
 (defvar *HHUBDEFAULTLOGOIMG* "/img/logo.png")
 (defvar *HHUBGLOBALLYCACHEDLISTSFUNCTIONS* NIL)
@@ -84,7 +84,7 @@
 (defvar *HHUBSUPPORTEMAIL* "support@ninestores.in")
 (defvar *HHUBPENDINGUPIFUNCTIONS-HT* nil)
 (defvar *HHUBTRIALCOMPANYEXPIRYDAYS* 90)
-(defvar *HHUBOTPTESTING* T)
+(defvar *HHUBOTPTESTING* NIL)
 (defvar *HHUBUSELOCALSTORFORRES* NIL)
 (defvar *HHUBWHATAPPLINKURLINDIA* "https://wa.me/91")
 (defvar *HHUBWHATSAPPBUTTONIMG* "WhatsAppButtonGreenSmall.png")
@@ -132,16 +132,6 @@
 ;; NINE STORE OTP store
 (defvar *otp-store* (make-otp-store))
 
-(defun set-customer-page-title (name)
-  (setf *customer-page-title* (format nil "Welcome to Nine Stores - ~A." name))) 
- 
-(defun set-vendor-page-title (name)
-  (setf *vendor-page-title* (format nil "Welcome to Nine Stores - ~A." name))) 
-
-(defun set-admin-page-title (name)
-  (setf *admin-page-title* (format nil "Welcome to Nine Stores - ~A." name))) 
-
-
 ;; Connect to the database (see the CLSQL documentation for vendor
 ;; specific connection specs).
 
@@ -152,27 +142,21 @@ Username
 Password 
 Servername 
 Database type: Supported type is ':odbc'"
-
-  (progn 
-    (case strdbtype
-      ((:mysql :postgresql :postgresql-socket)
-       (setf *dod-db-instance* (clsql:connect `(,servername
-			,strdb
-			,strusr
-			,strpwd)
-		      :database-type strdbtype)))
-      ((:odbc :aodbc :oracle)
-       (clsql:connect `(,strdb
-			,strusr
-			,strpwd)
-		      :database-type strdbtype))
-      (:sqlite
-       (clsql:connect `(,strdb)
-		      :database-type strdbtype)))
-
-    (clsql:start-sql-recording)))
-
-
+  (case strdbtype
+    ((:mysql :postgresql :postgresql-socket)
+     (setf *dod-db-instance* (clsql:connect `(,servername
+					      ,strdb
+					      ,strusr
+					      ,strpwd)
+					    :database-type strdbtype)))
+    ((:odbc :aodbc :oracle)
+     (clsql:connect `(,strdb
+		      ,strusr
+		      ,strpwd)
+		    :database-type strdbtype))
+    (:sqlite
+     (clsql:connect `(,strdb)
+		    :database-type strdbtype))))
 
 (defvar *http-server* nil)
 (defvar *ssl-http-server* nil)
@@ -181,12 +165,15 @@ Database type: Supported type is ':odbc'"
 
 
 (defun init-hhubplatform ()
-  (cond  ((null *dod-debug-mode*) (setf *dod-database-caching* T))
-	 (*dod-debug-mode* (setf *dod-database-caching* nil))
-	 (T (setf *dod-database-caching* NIL))))
+  (cond  ((null *dod-debug-mode*)
+	  (setf *dod-database-caching* T))
+	 (*dod-debug-mode*
+	  (setf *dod-database-caching* nil))
+	 (T
+	  (setf *dod-database-caching* NIL))))
 
 
-(defun start-das(&optional (withssl nil) (debug-mode T)  )
+(defun start-das (&optional (withssl nil) (debug-mode T))
   :documentation "Start ninestores server with or without ssl. If withssl is T, then start the hunchentoot server with ssl settings"
   (setf *dod-debug-mode* debug-mode)
   (setf *random-state* (make-random-state t))
