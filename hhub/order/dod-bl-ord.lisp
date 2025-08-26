@@ -106,9 +106,9 @@
 
 
 (defun get-orderids-for-vendor (vendor-instance  company &optional (fulfilled "N")  (recordsfordays 30))
-  (let* ((tenant-id (slot-value company 'row-id))
-	 (strfromdate (get-date-string-mysql (clsql-sys:date- (clsql-sys:get-date) (clsql-sys:make-duration :day recordsfordays))))
-	 (strtodate (get-date-string-mysql (clsql-sys:date+ (clsql-sys:get-date) (clsql-sys:make-duration :day recordsfordays))))
+  (let* ((tenant-id (slot-value company 'row-id)) ;;租户ID
+	 (strfromdate (get-date-string-mysql (clsql-sys:date- (clsql-sys:get-date) (clsql-sys:make-duration :day recordsfordays)))) ;;开始时间
+	 (strtodate (get-date-string-mysql (clsql-sys:date+ (clsql-sys:get-date) (clsql-sys:make-duration :day recordsfordays)))) ;;结束时间
 	 (vendor-id (slot-value vendor-instance 'row-id)))
 	 (clsql:select [order-id] :from  'dod-vendor-orders :where
 		       [and [= [:tenant-id] tenant-id]
