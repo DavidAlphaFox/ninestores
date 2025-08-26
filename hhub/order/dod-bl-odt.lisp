@@ -3,7 +3,7 @@
 (clsql:file-enable-sql-reader-syntax)
 
 
-
+;;得到订单的细节信息，主要是包含了哪些产品
 (defun get-order-items (order-instance)
 :documentation "Returns the list of order details instances given order-instance as input"
   (let ((tenant-id (slot-value order-instance 'tenant-id))
@@ -108,7 +108,7 @@
 	       :caching nil :flatp t )))
 
 
-
+;;通过产品ID获得所有订单
 (defun get-order-items-by-product-id (prd-id order-id tenant-id)
  (car (clsql:select 'dod-order-items  :where
 		[and [= [:deleted-state] "N"]
@@ -119,20 +119,20 @@
 
 (defun update-order-item (odt-instance); This function has side effect of modifying the database record.
   (clsql:update-records-from-instance odt-instance))
-
+;;取消订单，批量操作
 (defun cancel-order-items (list company-instance)
-  (let ((tenant-id (slot-value company-instance 'row-id)))
+  (let ((tenant-id (slot-value company-instance 'row-id))) ;;找到租户ID
     (mapcar (lambda (id)  (let ((dodorder (car (clsql:select 'dod-order-items :where [and [= [:row-id] id] [= [:tenant-id] tenant-id]] :flatp t :caching nil))))
-			  (setf (slot-value dodorder 'status) "CCN") ; CCN = CANCELLED BY CUSTOMER
+			  (setf (slot-value dodorder 'status) "CCN") ; CCN = CANCELLED BY CUSTOMER 客户取消了
 			  (clsql:update-record-from-slot dodorder  'status))) list )))
-
+;;删除订单，批量操作
 (defun delete-order-items (list company-instance)
     (let ((tenant-id (slot-value company-instance 'row-id)))
   (mapcar (lambda (id)  (let ((dodorder (car (clsql:select 'dod-order-items :where [and [= [:row-id] id] [= [:tenant-id] tenant-id]] :flatp t :caching nil))))
 			  (setf (slot-value dodorder 'deleted-state) "Y")
 			  (clsql:update-record-from-slot dodorder  'deleted-state))) list )))
 
-
+;; 恢复删除的订单
 (defun restore-deleted-order-details ( list company-instance )
     (let ((tenant-id (slot-value company-instance 'row-id)))
 (mapcar (lambda (id)  (let ((dodorder (car (clsql:select 'dod-order-items :where [and [= [:row-id] id] [= [:tenant-id] tenant-id]] :flatp t :caching nil))))
@@ -141,7 +141,7 @@
 
   
 
-  
+;;存储订单，此时会记录折扣  
 (defun persist-order-items(order-id product-id vendor-id unit-price discount product-qty  tenant-id )
   (hhub-log-message (format nil "discount just before saving is ~A" discount))
   (clsql:update-records-from-instance (make-instance 'dod-order-items

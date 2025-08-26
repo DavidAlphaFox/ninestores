@@ -61,14 +61,14 @@
 
     
 
-
+;;得到特定公司的订单
 (defun get-orders-by-company (company-instance &optional (fulfilled "N"))
   (let ((tenant-id (slot-value company-instance 'row-id)))
       (clsql:select 'dod-order  :where [and [= [:deleted-state] "N"]
 	  [= [:tenant-id] tenant-id]
 	  [= [:order-fulfilled] fulfilled]]    :caching *dod-debug-mode* :flatp t )))
 
-
+;;计算某个特定租户下的特定供应商，完成的订单数量
 (defun count-vendor-orders-completed (vendor order company) 
  (let ((tenant-id (slot-value company 'row-id)) 
        (vendor-id (slot-value vendor 'row-id))
@@ -82,7 +82,7 @@
 		[= [:vendor-id] vendor-id]
 		[=[:order-id] order-id]]    :caching nil :flatp t ))))
 
-
+;;特定租户的特定供应商，进行中的订单数量
 (defun count-vendor-orders-pending (vendor order company) 
  (let ((tenant-id (slot-value company 'row-id)) 
        (vendor-id (slot-value vendor 'row-id))
