@@ -1,5 +1,5 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-(in-package :hhub)
+(in-package :nstores)
 
 
 (defclass ShippingRateCheck (BusinessObject)
@@ -103,7 +103,6 @@
      :type (string 3)
      :initarg :defaultshippingmethod)
     
-
     (shippartnerkey
      :type (string 50)
      :initarg :shippartnerkey)
