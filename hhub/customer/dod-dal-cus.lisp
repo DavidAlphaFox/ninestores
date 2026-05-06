@@ -1,7 +1,41 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：customer 客户（旧风格 dod-）
+;;;; 分层：DAL（数据访问层）
+;;;; 文件：hhub/customer/dod-dal-cus.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义客户主数据相关的领域对象与 CLSQL view-class：
+;;;;       - 地址相关 DDD 类（address / RequestPincode / ResponseAddress / ViewModel
+;;;;         + AddressService / Adapter / Presenter）。
+;;;;       - 客户档案 dod-cust-profile（DOD_CUST_PROFILE）—— Nine Stores 客户主表，
+;;;;         字段覆盖个人信息、登录凭证、B2B 公司信息、税务/银行/合规、KYC、
+;;;;         平台使用指标，并 JOIN 公司、用户、钱包、订单。
+;;;;       - GuestCustomer / StandardCustomer 子视图类。
+;;;;       - 钱包表 dod-cust-wallet（DOD_CUST_WALLET）—— 客户在某 vendor 处的余额账户。
+;;;;
+;;;; 主要导出：
+;;;;   address / RequestPincode / ResponseAddress / AddressViewModel
+;;;;   AddressService / Address-Adapter / Address-Presenter
+;;;;   dod-cust-profile / GuestCustomer / StandardCustomer
+;;;;   dod-cust-wallet
+;;;;
+;;;; 关联：
+;;;;   上游使用方：customer/dod-bl-cus.lisp（CRUD/业务）、
+;;;;               所有需要客户数据的模块（order/invoice/upi/...）。
+;;;;   下游依赖：account/dod-dal-cmp.lisp（dod-company）、
+;;;;             vendor/dod-dal-ven.lisp（dod-vend-profile）、
+;;;;             sysuser/dod-dal-sys.lisp（dod-users）、
+;;;;             customer 新表 dod-customer-users（在 nst-dbu-custusers 升级后引入）。
+;;;; ============================================================================
+
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
+;; ----------------------------------------------------------------------------
+;; 类：address —— 地址领域对象（DDD，不直接持久化为表）。
+;; 字段：house-no / street / locality / city / state / pincode / country /
+;;       longitude / latitude。供地址校验/检索使用。
+;; ----------------------------------------------------------------------------
 (defclass address (BusinessObject)
   ((house-no)
    (street)
@@ -13,9 +47,11 @@
    (longitude)
    (latitude)))
   
+;; RequestPincode —— 输入：仅 pincode（用于按邮编查地址）。
 (defclass RequestPincode (RequestModel)
   (pincode))
 
+;; ResponseAddress —— 输出：地址完整字段。被地址 AJAX 接口序列化。
 (defclass ResponseAddress (ResponseModel)
   ((house-no)
    (street)
@@ -27,6 +63,7 @@
    (longitude)
    (latitude)))
 
+;; AddressViewModel —— 视图层用，仅展示 locality/state/city/pincode 4 项。
 (defclass AddressViewModel (ViewModel)
   ((locality)
    (state)
@@ -34,6 +71,8 @@
    (pincode)))
 
 
+;; AddressService / Address-Adapter / Address-Presenter ——
+;; 应是 nst- 风格领域服务的旧式占位（推测：行为方法可能尚未完全实现）。
 (defclass AddressService (BusinessService)
   ())
 
@@ -43,7 +82,45 @@
 (defclass Address-Presenter (PresenterService)
   ())
 
-  
+
+;; ----------------------------------------------------------------------------
+;; 实体：dod-cust-profile
+;; 表：DOD_CUST_PROFILE
+;; 含义：客户主档 —— Nine Stores 平台上的购买者主数据。承载个人/B2B 公司/税务/
+;;       银行/KYC/平台行为统计等所有客户维度信息。
+;; 关键字段（按分组）：
+;;   主键：       row-id
+;;   人员：       name / firstname / lastname / fullname / salutation / title /
+;;                birthdate / picture-path
+;;   登录凭据：   username / password / salt（推测：DEPRECATED 注释提示已迁移到
+;;                DOD_CUSTOMER_USERS，新逻辑走 nst-dbu-custusers 升级表）
+;;   联系方式：   phone（NOT NULL，常作业务键）、email、email-add-verified
+;;   地址：       address / city / state / country / zipcode
+;;   多租户：     tenant-id → dod-company.row-id
+;;   状态：       active-flag / suspend-flag / deleted-state /
+;;                approved-flag / approval-status / approved-by / cust-type
+;;   B2B：       legal-company-name / company-name / legal-name /
+;;                gst-customer-type（默认 B2C）/ gstin / pan-number /
+;;                business-type / organization-type / gst-registration-type /
+;;                tan-number / msme-number / is-tax-exempt / tax-exemption-cert
+;;   业务详情：   business-established-date / annual-turnover /
+;;                employee-count / industry
+;;   财务条款：   credit-limit（默认 0.00） / payment-terms（默认 PREPAID）/
+;;                credit-days
+;;   联系人：     primary-contact-* / accounts-contact-*
+;;   银行：       bank-account-number / bank-ifsc-code / bank-name /
+;;                bank-branch / bank-account-holder-name
+;;   公司地址：   registered-address / billing-address / shipping-address /
+;;                registered-state / registered-city / registered-zipcode
+;;   KYC：       kyc-status（默认 PENDING）/ kyc-verified-date /
+;;                kyc-verified-by → dod-users / kyc-documents
+;;   其他：       blacklisted-vendors / upi-id
+;;   平台指标：   last-order-date / total-orders / total-spent / loyalty-points
+;;   关联：       company（JOIN dod-company）、customer-users / wallets / orders、
+;;                kyc-verifier（JOIN dod-users）
+;; 备注：源码末尾的 tenant-id / company slot 出现了第二次定义（应是 JOIN 名 get-company
+;;       的别名访问器，推测：与上面的 cust-profile-company 并存以便不同调用习惯）。
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-cust-profile ()
   (;; Primary Key
    (row-id 
@@ -455,15 +532,42 @@
   (:base-table dod_cust_profile))
 
 
+;; ----------------------------------------------------------------------------
+;; 子视图类：GuestCustomer —— cust-type='GUEST' 的客户（短期会话、无密码）。
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class GuestCustomer (dod-cust-profile)
   ())
 
+;; ----------------------------------------------------------------------------
+;; 子视图类：StandardCustomer —— cust-type='STANDARD' 的常规注册客户。
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class StandardCustomer (dod-cust-profile)
   ())
 
 
 
 ;;;;; Create class for DOD_CUST_WALLET table
+;; ----------------------------------------------------------------------------
+;; 实体：dod-cust-wallet
+;; 表：DOD_CUST_WALLET
+;; 含义：客户在某 vendor 处的钱包/预付余额账户（PRE 支付方式订单从此扣款）。
+;;       同一 customer 可能在多个 vendor 各有一个 wallet。
+;; 关键字段：
+;;   row-id                       主键
+;;   cust-id / customer           外键 → dod-cust-profile
+;;   vendor-id / vendor           外键 → dod-vend-profile
+;;   tenant-id                    多租户隔离键
+;;   customer-gstin / vendor-gstin 用于 GST 凭证关联
+;;   balance                      当前可用余额
+;;   lifetime-spent / current-month-spent  消费统计
+;;   total-advances-received / total-advances-adjusted /
+;;   unadjusted-advance-value / unadjusted-gst-amount /
+;;   oldest-voucher-date          GST 预收款合规台账
+;;   wallet-status                状态枚举（应为 ACTIVE/SUSPENDED/CLOSED 等，推测）
+;;   auto-reload-* / monthly-budget-limit / low-balance-* 自动充值与预算/告警
+;;   suspended-at/by/reason、closed-at/by/reason  生命周期审计
+;;   created / updated / deleted-state  审计与软删
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-cust-wallet ()
   ((row-id
     :db-kind :key

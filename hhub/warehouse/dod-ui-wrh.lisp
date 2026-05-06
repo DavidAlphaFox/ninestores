@@ -1,10 +1,57 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：warehouse —— UI 控制器 / 视图 / JSON 渲染
+;;;; 分层：UI（控制器 + CL-WHO 模板）—— 新风格（Context Flow Dispatcher，41 字段）
+;;;; 文件：hhub/warehouse/dod-ui-wrh.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：
+;;;;   1) Context Flow Dispatcher 路由注册：register-outbound-route 注册
+;;;;      :warehouse/{create,read,readall,update,delete} 五条路由，绑定 RequestModel/
+;;;;      BusinessObject/Adapter/Presenter/View 五件套，并附 tags / required-roles /
+;;;;      feature-flags / audit-level / metadata。
+;;;;   2) 控制器函数（com-hhub-transaction-*）：把 Hunchentoot 请求参数解析为
+;;;;      raw-params（plist），交给 dispatch-route 路由分发。
+;;;;   3) 旧风格仓库管理页面：com-hhub-transaction-warehouse-page +
+;;;;      create-model-for-* / create-widgets-for-*；包含搜索框、列表、添加对话框。
+;;;;   4) HTML 渲染：RenderListViewHTML、display-warehouse-row 单行展示。
+;;;;   5) 5-tab 仓库编辑对话框：com-hhub-transaction-create-warehouse-dialog
+;;;;      （Basic / Ownership / GST / Logistics / Location）。
+;;;;   6) JSON 渲染：Render（单条 41 字段）/ RenderList（列表精简版）。
+;;;;
+;;;; 主要导出：
+;;;;   com-hhub-transaction-create-warehouse-action / -read- / -readall- / -update- / -delete-
+;;;;   com-hhub-transaction-warehouse-page             —— 仓库管理主页
+;;;;   com-hhub-transaction-search-warehouse-action    —— 搜索 ajax handler
+;;;;   com-hhub-transaction-create-warehouse-dialog    —— 增/编 5-tab 弹窗
+;;;;   warehouse-search-html                           —— 搜索框组件
+;;;;   create-model-for-showwarehouses / -searchwarehouses
+;;;;   create-widgets-for-showwarehouses / -searchwarehouses
+;;;;   display-warehouse-row                           —— 列表行渲染
+;;;;
+;;;; 关联：
+;;;;   上游使用方：Hunchentoot 请求 + 浏览器表单。
+;;;;   下游依赖：warehouse/dod-bl-wrh.lisp（业务方法）、warehouse/dod-dal-wrh.lisp、
+;;;;             core 平台基础（with-opr-session-check、with-mvc-ui-page、
+;;;;             with-hhub-transaction、register-outbound-route、dispatch-route、
+;;;;             with-html-form / with-html-search-form / display-as-table /
+;;;;             modal-dialog / submitsearchform1event-js / get-login-company /
+;;;;             get-login-vendor / get-login-user-name / get-login-user-role-name）。
+;;;;
+;;;; 备注：本文件采用项目"新风格"——所有 CRUD 经 Context Flow Dispatcher 走，
+;;;;       而不是直接调用 BL；request 解析 → raw-params plist → dispatch-route。
+;;;; ============================================================================
+
 ;; nst-ui-warehouse.lisp
 ;; UI Layer for Warehouse entity with Context Flow Dispatcher (UPDATED - 41 fields with ownership)
 (in-package :nstores)
 
 ;;; ===========================================================================
 ;;; CONTEXT FLOW DISPATCHER - OUTBOUND ROUTE REGISTRATIONS
+;;; 中文：路由注册区。每条 register-outbound-route 把 keyword route id
+;;;       绑定到一组 (RequestModel / BusinessObject / Adapter / Presenter / View) 类，
+;;;       并声明 tags / required-roles / feature-flags / audit-level / version / metadata。
+;;;       控制器把 Hunchentoot 入参拼为 plist 后，dispatch-route 自动按这里登记的类型
+;;;       做 Adapter → BusinessService → Presenter → View 的 pipeline。
 ;;; ===========================================================================
 
 ;;; ---------------------------------------------------------------------------
@@ -124,7 +171,10 @@
 ;;; CREATE Action Handler
 ;;; ---------------------------------------------------------------------------
 (defun com-hhub-transaction-create-warehouse-action ()
-  "Handler for creating a new warehouse using context flow dispatcher with ownership"
+  "Handler for creating a new warehouse using context flow dispatcher with ownership.
+   中文：建仓控制器。入口需 OPR 会话；从 Hunchentoot 取 41 字段（含 ownership / GST /
+   logistics / location 等），整体 dispatch 到 :warehouse/create 路由，输出 JSON。
+   关联 BL：doCreate (WarehouseService)。"
   (with-opr-session-check
     (let* ((wname (hunchentoot:parameter "wname"))
            (waddr1 (hunchentoot:parameter "waddr1"))
@@ -216,7 +266,10 @@
 ;;; READ Action Handler
 ;;; ---------------------------------------------------------------------------
 (defun com-hhub-transaction-read-warehouse-action ()
-  "Handler for reading a single warehouse using context flow dispatcher"
+  "Handler for reading a single warehouse using context flow dispatcher.
+   中文：单条读取控制器（按 wname 名称）。需 OPR 会话；dispatch :warehouse/read。
+   备注：底层 doRead 实际是按 row-id 读，本路由参数 wname 与 doRead 不匹配
+        （推测：实现仍在演进，目前调用方需保证 row-id 透传或改用其他路由）。"
   (with-opr-session-check
     (let* ((wname (hunchentoot:parameter "wname"))
            (company (get-login-company))
@@ -231,7 +284,9 @@
 ;;; READ ALL Action Handler
 ;;; ---------------------------------------------------------------------------
 (defun com-hhub-transaction-readall-warehouse-action ()
-  "Handler for reading all warehouses using context flow dispatcher"
+  "Handler for reading all warehouses using context flow dispatcher.
+   中文：列表查询控制器。需 OPR 会话；从会话取当前 vendor / company，
+   dispatch :warehouse/readall（底层 doReadAll 用 select-vendor-warehouses）。"
   (with-opr-session-check
     (let* ((company (get-login-company))
            (vendor (get-login-vendor))
@@ -246,7 +301,10 @@
 ;;; UPDATE Action Handler
 ;;; ---------------------------------------------------------------------------
 (defun com-hhub-transaction-update-warehouse-action ()
-  "Handler for updating a warehouse using context flow dispatcher with ownership"
+  "Handler for updating a warehouse using context flow dispatcher with ownership.
+   中文：更新控制器，参数与建仓相同。dispatch :warehouse/update → doUpdate。
+   备注：当前 raw-params 没有携带 row-id，因此 doUpdate 内的 select-warehouse-by-id 需要
+        从 requestmodel 解析。推测：dispatch-route 在内部把额外的 row-id 也带进 requestmodel。"
   (with-opr-session-check
     (let* ((wname (hunchentoot:parameter "wname"))
            (waddr1 (hunchentoot:parameter "waddr1"))
@@ -338,7 +396,9 @@
 ;;; DELETE Action Handler
 ;;; ---------------------------------------------------------------------------
 (defun com-hhub-transaction-delete-warehouse-action ()
-  "Handler for deleting a warehouse using context flow dispatcher"
+  "Handler for deleting a warehouse using context flow dispatcher.
+   中文：软删控制器（按 wname 入参，dispatch :warehouse/delete → doDelete）。
+   底层 doDelete 用 row-id 而不是 wname，故同上推测：dispatch-route 内部转化。"
   (with-opr-session-check
     (let* ((wname (hunchentoot:parameter "wname"))
            (company (get-login-company))
@@ -357,7 +417,9 @@
 ;;; HTML Search Interface
 ;;; ---------------------------------------------------------------------------
 (defun warehouse-search-html ()
-  "Generate warehouse search HTML"
+  "Generate warehouse search HTML.
+   中文：渲染顶部搜索框（搜索框 id：idwarehouselivesearch；
+   结果挂到 #warehouselivesearchresult，由 submitsearchform1event-js 绑定）。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "row"
           (:div :id "custom-search-input"
@@ -373,7 +435,9 @@
 ;;; Main Warehouse Page
 ;;; ---------------------------------------------------------------------------
 (defun com-hhub-transaction-warehouse-page ()
-  "Main warehouse management page"
+  "Main warehouse management page.
+   中文：仓库主页（admin 角色）。with-mvc-ui-page 进入 MVC 渲染管线，
+   create-model 拉数据，create-widgets 渲染。需 OPR 会话。"
   (with-opr-session-check
     (with-mvc-ui-page "Warehouse Management" 
                       #'create-model-for-showwarehouses 
@@ -381,7 +445,10 @@
                       :role :admin)))
 
 (defun create-model-for-showwarehouses ()
-  "Create model for showing all warehouses"
+  "Create model for showing all warehouses.
+   中文：拉当前 vendor 拥有的仓库列表（DDD 管线：Adapter → BusinessService → Presenter →
+   ViewModel）。同时用 with-hhub-transaction 走 PEP/PDP 鉴权。
+   返回闭包：调用后产生 (values viewallmodel htmlview username)。"
   (let* ((company (get-login-company))
          (username (get-login-user-name))
          (vendor (get-login-vendor))
@@ -403,7 +470,9 @@
         (values viewallmodel htmlview username))))))
 
 (defun create-widgets-for-showwarehouses (modelfunc)
-  "Create widgets for warehouse page"
+  "Create widgets for warehouse page.
+   中文：返回 widget 闭包列表：widget1 输出欢迎语 + 搜索框；widget2 输出
+   '添加仓库' 按钮 + 列表数量徽章 + 仓库列表（RenderListViewHTML）。"
   (multiple-value-bind (viewallmodel htmlview username) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
                      (cl-who:with-html-output (*standard-output* nil)
@@ -437,7 +506,9 @@
 ;;; Search Functionality
 ;;; ---------------------------------------------------------------------------
 (defun create-model-for-searchwarehouses ()
-  "Create model for searching warehouses"
+  "Create model for searching warehouses.
+   中文：把搜索框输入 warehouselivesearch 包成 WarehouseSearchRequestModel，
+   走 doReadAll 实现按 name LIKE 查询，最终生成 viewallmodel + htmlview。"
   (let* ((search-clause (hunchentoot:parameter "warehouselivesearch"))
          (company (get-login-company))
          (warehousepresenter (make-instance 'WarehousePresenter))
@@ -458,7 +529,8 @@
         (values viewallmodel htmlview))))))
 
 (defun create-widgets-for-searchwarehouses (modelfunc)
-  "Create widgets for search results"
+  "Create widgets for search results.
+   中文：搜索结果页 widget 列表：'添加' 按钮 + 数量徽章 + 列表表格。"
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
                      (cl-who:with-html-output (*standard-output* nil) 
@@ -479,7 +551,9 @@
       (list widget1))))
 
 (defun com-hhub-transaction-search-warehouse-action ()
-  "Search warehouse action handler"
+  "Search warehouse action handler.
+   中文：搜索 ajax 入口。组合 model + widgets 后用 with-html-output-to-string 串成 HTML
+   片段返回前端，前端塞到 #warehouselivesearchresult。"
   (let* ((modelfunc (funcall #'create-model-for-searchwarehouses))
          (widgets (funcall #'create-widgets-for-searchwarehouses modelfunc)))
     (cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
@@ -490,7 +564,9 @@
 ;;; HTML Rendering
 ;;; ---------------------------------------------------------------------------
 (defmethod RenderListViewHTML ((htmlview WarehouseHTMLView) viewmodellist)
-  "Render warehouse list as HTML table with ownership info"
+  "Render warehouse list as HTML table with ownership info.
+   中文：把仓库 viewmodel 列表渲染为 9 列表格（Name / GSTIN / City / State / Type /
+   Ownership / Manager / Phone / Active / Actions），每行调 display-warehouse-row。"
   (when viewmodellist
     (display-as-table (list "Name" "GSTIN" "City" "State" "Type" "Ownership" 
                            "Manager" "Phone" "Active" "Actions") 
@@ -498,7 +574,10 @@
                      'display-warehouse-row)))
 
 (defun display-warehouse-row (warehouse &rest arguments)
-  "Display a single warehouse row with ownership information"
+  "Display a single warehouse row with ownership information.
+   中文：渲染单行 9 个 td。最后一列是 'Edit' 按钮 + 编辑 modal（按 wname 命名隔离 ID）。
+   对未填字段使用兜底值（warehouse-gstin 空 → 'N/A'，warehouse-type 空 → 'OWN'，
+   ownership-type 空 → 'SELLER_OWNED'）。"
   (declare (ignore arguments))
   (with-slots (wname warehouse-gstin wcity wstate warehouse-type 
                ownership-type owner-entity-type
@@ -528,7 +607,18 @@
 ;;; Warehouse Dialog (with all 41 fields organized in 5 tabs including Ownership)
 ;;; ---------------------------------------------------------------------------
 (defun com-hhub-transaction-create-warehouse-dialog (&optional warehouseobj)
-  "Create/Edit warehouse dialog with tabbed interface for all 41 fields"
+  "Create/Edit warehouse dialog with tabbed interface for all 41 fields.
+   中文：5 标签页编辑对话框。
+     - Basic Info：wname / waddr1/2 / wpin / wcity / wstate / wcountry / wmanager / wphone / waltphone / wemail / activeflag
+     - Ownership：ownership-type / owner-entity-type / owner-entity-id /
+                  operator-entity-type / operator-entity-id / legal-entity-type
+                  + 'Common Scenarios' 提示面板（Traditional / VMI / 3PL）
+     - GST：warehousegstin / gstinstatus / legalname / pannumber / statecode /
+            registrationtype / isprimarylocation
+     - Logistics：warehousetype / warehousepurpose / defaulttransporterid/-name /
+                  ewaybillenabled / valuationmethod / hsnwisestock
+     - Location：latitude / longitude
+   表单 action：传入 warehouseobj 走 'updatewarehouseaction'，否则 'createwarehouseaction'。"
   (let* ((wname (if warehouseobj (slot-value warehouseobj 'wname)))
          (waddr1 (if warehouseobj (slot-value warehouseobj 'waddr1)))
          (waddr2 (if warehouseobj (slot-value warehouseobj 'waddr2)))
@@ -802,7 +892,11 @@
 ;;; ---------------------------------------------------------------------------
 
 (defmethod Render ((view WarehouseJSONView) (viewmodel WarehouseViewModel))
-  :description "Render warehouse view model as JSON with ownership fields"
+  :description "Render warehouse view model as JSON with ownership fields.
+   中文：把单条仓库视图模型转为完整 41 字段 JSON。当 warehouse-code + wname 两者皆非 nil
+   时构造完整 payload；否则返回 success=0 的失败 JSON。
+   字段命名转 camelCase；boolean/integer 字段做 nil → 默认值 兜底；
+   渲染结果挂回 view.jsondata。"
   (let* ((templist '())
          (appendlist '())
          (mylist '())
@@ -982,7 +1076,10 @@
 ;;; ---------------------------------------------------------------------------
 
 (defmethod RenderList ((view WarehouseJSONView) (viewmodellist list))
-  :description "Render list of warehouse view models as JSON with ownership"
+  :description "Render list of warehouse view models as JSON with ownership.
+   中文：批量渲染精简版仓库列表。每条只保留 (rowId / warehouseUuid / warehouseCode /
+   name / city / state / phone / ownership-* / warehouse-gstin / warehouse-type /
+   isPrimaryLocation / activeFlag)。最后输出 {warehouses, count, success}。"
   (let ((appendlist '())
         (mylist '()))
     

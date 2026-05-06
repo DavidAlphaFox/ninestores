@@ -1,4 +1,32 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— DAL 引擎类模板（DDD/六边形架构骨架）
+;;;; 分层：DAL（数据访问层）+ 模板代码生成器源
+;;;; 文件：hhub/core/hhub-dal-egn.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义新版"DDD / Hexagonal"风格领域类的脚手架。所有类名都用
+;;;;       %entity-name% 占位符，槽位用 %0%..%37%。代码生成器（脚手架脚本）
+;;;;       会把这些占位符替换成实际实体名（如 Customer / Order / Warehouse），
+;;;;       由此一次生成 Adapter / DBService / Presenter / Service / HTMLView
+;;;;       以及 RequestModel / ResponseModel / ViewModel / BusinessObject /
+;;;;       def-view-class 等一整套类。
+;;;;
+;;;; 主要导出（占位符版本，仅供模板替换）：
+;;;;   %entity-name%Adapter / %entity-name%DBService / %entity-name%Presenter
+;;;;   %entity-name%Service / %entity-name%HTMLView
+;;;;   %entity-name%-NotFound-View / -Unavailable-View / -Conflict-View
+;;;;       — 对应 Belnap :F / :U / :C 真值的容错视图
+;;;;   %entity-name%ViewModel / %entity-name%ResponseModel
+;;;;   %entity-name%RequestModel / %entity-name%SearchRequestModel
+;;;;   %entity-name%（BusinessObject）
+;;;;   dod-%entity-name%（CLSQL view-class）
+;;;;
+;;;; 关联：
+;;;;   下游使用方：脚手架生成的 nst-{dal,bl,ui}-<Entity>.lisp 文件
+;;;;   备注：本文件原样编译时无害（占位符是合法 CL 符号），但在生产代码里
+;;;;         不应被业务直接调用。
+;;;; ============================================================================
+
 (in-package :nstores)
 
 

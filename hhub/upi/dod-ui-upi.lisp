@@ -1,11 +1,58 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：upi UPI 收款
+;;;; 分层：UI（控制器 + CL-WHO 模板 + 二维码生成 + 充值/确认动作）
+;;;; 文件：hhub/upi/dod-ui-upi.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：客户端 UPI 支付与卖家端 UPI 流水管理的全部 UI / 控制器：
+;;;;       - 客户结算 UPI 页（QR + 4 个 App URL Scheme + UTR 输入）
+;;;;       - 钱包充值 UPI 页（同上 + 写入挂起任务，确认到账时执行 set-balance）
+;;;;       - 卖家近 60 天 UPI 流水列表 + 行内"已收/未收"操作
+;;;;       - 通过 *HHUBPENDINGUPIFUNCTIONS-HT* 在 utrnum 维度暂存待执行的回调
+;;;;
+;;;; 主要导出（控制器）：
+;;;;   com-hhub-transaction-show-customer-upi-page  — 客户 UPI 结算页
+;;;;   hhub-controller-upi-customer-order-payment-page — 客户订单付款页（同模板较精简）
+;;;;   hhub-controller-upi-recharge-wallet-page / -action — 钱包 UPI 充值
+;;;;   hhub-controller-vendor-upi-confirm / -cancel  — 卖家确认/驳回流水
+;;;;   hhub-controller-show-vendor-upi-transactions  — 卖家 UPI 流水列表页
+;;;;
+;;;; 主要导出（构件）：
+;;;;   generateqrcodeforvendor      — 用 qrencode CLI 生成 upi://pay PNG
+;;;;   generateupiurlsforvendor     — 生成 phonepe/paytmmp/gpay/upi 4 个深链
+;;;;   display-upi-widget           — QR + 链接 + 倒计时 + UTR 提示
+;;;;   save-upi-transaction         — 把 UTR 信息落库的薄包装
+;;;;   vendor-upi-payment-confirm / -cancel — 卖家侧状态机切换
+;;;;   hhub-add-pending-upi-task / hhub-execute-pending-upi-task
+;;;;       — 基于 *HHUBPENDINGUPIFUNCTIONS-HT* 的"待支付 → 确认后执行"机制
+;;;;   RenderListViewHTML / display-upi-transaction-row /
+;;;;   modal.vendor-upi-payment-confirm — 列表视图 + 行渲染 + 确认弹窗
+;;;;
+;;;; 关联：
+;;;;   上游使用方：路由 dodcustshopcart → dodcustordershipaddrpage → 本页；
+;;;;               卖家路由 hhubvendorupitransactions / hhubvendupipayconfirm / hhubvendupipaycancel
+;;;;   下游依赖：upi/dod-bl-upi.lisp（六边形 Adapter / Service / Presenter）、
+;;;;             cust 钱包 BL（set-wallet-balance）、order/ vendor / customer / company
+;;;; ============================================================================
+
 (in-package :nstores)
 
 (defun com-hhub-transaction-show-customer-upi-page ()
-  (with-cust-session-check ;; delete if not needed. 
+  "URL 控制器：渲染客户的 UPI 结算页面（购物车 → 地址 → 本页）。
+   要求：客户登录会话。
+   渲染：通过 with-mvc-ui-page，model 由 create-model-for-showcustomerupipage 构造，
+        view 由 create-widgets-for-showcustomerupipage 渲染。"
+  (with-cust-session-check ;; delete if not needed.
     (with-mvc-ui-page "Customer UPI page" #'create-model-for-showcustomerupipage #'create-widgets-for-showcustomerupipage :role :customer )))
 
 (defun create-model-for-showcustomerupipage ()
+  "客户 UPI 结算页 model：
+   - 从 :customer-orderparams session 取购物车 / 地址 / 物流费等多达 30+ 字段
+   - 用 createorderobject 临时拼出一个 DRAFT 状态的 order 实体（仅用于渲染）
+   - 调 generateqrcodeforvendor + generateupiurlsforvendor 生成扫码图与 4 个 App 深链
+   - 取订单模板 #2，把 order + items 渲染成 HTML 块
+   返回：lambda → (values ordertemplate qrcodepath upiappurls charcountid1 order-amt currency)。
+   备注：order-cxt 为 \"#ORDER:UPI<universal-time>\" 形式。"
   (let* ((orderparams-ht (get-cust-order-params))
 	 (order-items (gethash "shoppingcart" orderparams-ht))
 	 (shopcart-products (gethash "shopcartproducts" orderparams-ht))
@@ -62,6 +109,11 @@
 
 
 (defun create-widgets-for-showcustomerupipage (modelfunc)
+  "客户 UPI 结算页 view：3 个 widget——
+   1. 面包屑（Cart → Address）
+   2. UPI 表单：display-upi-widget + 隐藏字段 paymentmode/amount + UTR 输入框 + Place Order
+      表单 action = dodmyorderaddaction（订单提交）
+   3. 订单模板 HTML 预览。"
   (multiple-value-bind (ordertemplate qrcodepath upiappurls charcountid1 order-amt currency) (funcall modelfunc)
     (let* ((widget1 (function (lambda ()
 		     (with-customer-breadcrumb
@@ -94,6 +146,12 @@
 
 
 (defun generateqrcodeforvendor  (vendor retailer-category-code transaction-id amount)
+  "为指定 vendor 生成一张 upi://pay 协议的二维码 PNG。
+   实现：拼出 upi://pay?pa=<upi-id>&pn=<vendor>&am=<amount>&tr=<txid>&cu=INR&mc=<mcc>，
+        再用系统命令 qrencode -s 5 -l L -v 5 -o /tmp/upiqr<ts>.png 落到
+        *HHUBRESOURCESDIR* 之下。
+   返回：相对 /img 的图片文件名（caller 拼成绝对 URL）；vendor 无 upi-id 时返回 nil。
+   副作用：sb-ext:run-program 调用外部 qrencode；写文件。"
   ;; upiapp values are phonepe, paytmmp, gpay, upi
   (let* ((upi-id (slot-value vendor 'upi-id))
 	 (vendor-name (slot-value vendor 'name))
@@ -110,7 +168,10 @@
 
 
 (defun generateupiurlsforvendor  (vendor retailer-category-code transaction-id amount)
-  :description "Generates the UPI payment URLs for a vendor and returns an url list containing one url per app. upiapp values are phonepe, paytmmp, gpay, upi"
+  :description "Generates the UPI payment URLs for a vendor and returns an url list containing one url per app. upiapp values are phonepe, paytmmp, gpay, upi.
+   中文：为 vendor 生成 4 个 App 专属深链：phonepe:// / paytmmp:// / gpay:// / upi://，
+        每个都带 pa/pn/am/tr/cu/mc。点击对应链接会拉起手机端的 UPI 应用直接付款。
+        若 vendor 未配置 upi-id，返回 nil。"
   (let* ((paymentapps (list "phonepe" "paytmmp" "gpay" "upi"))
 	 (upi-id (slot-value vendor 'upi-id))
 	 (vendor-name (slot-value vendor 'name)))
@@ -121,6 +182,12 @@
 
 
 (defun display-upi-widget (amount currency qrcodepath upiappurls)
+  "渲染统一的 UPI 支付块：
+   - 标题 + 总金额
+   - 5 分钟倒计时（window.onload → countdowntimer(0,0,5,0)）
+   - 4 个 App 深链 + 一张二维码图（同一交易号，二者择一支付即可）
+   - 三段说明：扫码 → 复制 12 位 UTR → 粘贴到下方表单
+   - 找不到 UTR 的帮助图链接（*HHUBUTRNUMHELPIMG*）"
   (let ((upiappnames (list "Phone Pe" "Pay TM" "Google Pay" "UPI"))
 	(utrnumhelplinkimage (format nil "~A/img/~A" *siteurl* *HHUBUTRNUMHELPIMG* )))
     (cl-who:with-html-output (*standard-output* nil)
@@ -154,7 +221,10 @@
 
 
 (defun create-model-for-custorderpaymentpage  ()
-  (let* ((orderparams-ht (get-cust-order-params)) 
+  "客户付款页（精简版）model：仅算合计金额、生成 QR + 4 个深链。
+   订单合计 = 税后小计 + 物流费。订单上下文同样为 \"#ORDER:UPI<ts>\"。
+   返回 lambda → (values upitotal currency qrcodepath upiurls vendor charcountid1)。"
+  (let* ((orderparams-ht (get-cust-order-params))
 	 (odts (gethash "shoppingcart" orderparams-ht))
 	 (shipping-cost (gethash "shipping-cost" orderparams-ht))
 	 (totalaftertax (calculate-invoice-totalaftertax odts))
@@ -172,9 +242,13 @@
 
 
 (defun create-widgets-for-custorderpaymentpage (modelfunc)
+  "客户付款页 view：
+   widget1 — 面包屑；
+   widget2 — UPI 卡片，含 display-upi-widget + UTR 表单（action=dodmyorderaddaction）+ Previous 链。
+   边界：vendor 未配置 upi-id 时直接 hunchentoot:redirect 到 /hhub/vendorupinotfound。"
   (multiple-value-bind
 	( upitotal currency qrcodepath upiurls vendor charcountid1)
-      (funcall modelfunc) 
+      (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (with-customer-breadcrumb
 		       (:li :class "breadcrumb-item" (:a :href "dodcustshopcart" "Cart"))
@@ -206,10 +280,14 @@
 	  (list widget1 widget2 ))))
 
 (defun hhub-controller-upi-customer-order-payment-page ()
+  "URL 控制器：客户结算 UPI 简化页（卡片样式）。要求客户登录。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer UPI Payment Page" #'create-model-for-custorderpaymentpage #'create-widgets-for-custorderpaymentpage :role :customer)))
 
 (defun create-model-for-upirechargewalletpage ()
+  "钱包 UPI 充值页 model：
+   从 query string 取 wallet-id 与 amount；wallet 反查 vendor；
+   交易号格式 \"#WAL:<universal-time>\"。生成同样的 QR + App URL。"
   (let* ((wallet-id (hunchentoot:parameter "wallet-id"))
 	 (amount (hunchentoot:parameter "amount"))
 	 (custcomp (get-login-customer-company))
@@ -224,6 +302,10 @@
       (values amount currency qrcodepath upiurls wallet-id transaction-id charcountid1)))))
 
 (defun create-widgets-for-upirechargewalletpage (modelfunc)
+  "钱包 UPI 充值页 view：
+   - 有 qrcodepath：渲染 UPI 卡片 + 表单（action=hhubcustwalletrechargeaction，
+     隐藏字段 wallet-id / amount / transaction-id + UTR 输入）
+   - 无 qrcodepath：只显示\"vendor 未配置 UPI\"的占位提示。"
   (multiple-value-bind (amount currency qrcodepath upiurls wallet-id transaction-id charcountid1)
       (funcall modelfunc)
     (let ((widget1 (function (lambda ()
@@ -254,10 +336,20 @@
       (list widget1))))
   
 (defun hhub-controller-upi-recharge-wallet-page ()
+  "URL 控制器：客户钱包 UPI 充值页。要求客户登录。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer Recharge Wallet - UPI Payment Page" #'create-model-for-upirechargewalletpage #'create-widgets-for-upirechargewalletpage :role :customer)))
-  
+
 (defun hhub-controller-upi-recharge-wallet-action ()
+  "URL 控制器（POST 动作）：处理钱包充值表单提交。
+   流程：
+     1. 读 wallet-id / transaction-id / amount / utrnum；
+     2. 通过 UpiPaymentsRequestModel + UpiPaymentsAdapter.ProcessCreateRequest 落库一条
+        UPI 流水（PEN/N）；
+     3. 把"卖家确认到账后才执行"的回调 (set-wallet-balance latest-balance wallet) 注册到
+        *HHUBPENDINGUPIFUNCTIONS-HT*[utrnum]；
+     4. redirect 到 /hhub/dodcustwallet。
+   备注：钱包余额并非立即增加，必须等卖家在 vendor 端 confirm 后才会执行回调。"
   (with-cust-session-check
     (let* ((wallet-id (hunchentoot:parameter "wallet-id"))
 	   (transaction-id (hunchentoot:parameter "transaction-id"))
@@ -290,16 +382,24 @@
 
 
 (defun hhub-add-pending-upi-task (utrnum pendingfunction)
+  "把 utrnum → 待执行回调 注册到全局哈希 *HHUBPENDINGUPIFUNCTIONS-HT*。
+   后续卖家 confirm/cancel 时会查表执行/丢弃。"
   (setf (gethash utrnum *HHUBPENDINGUPIFUNCTIONS-HT*) pendingfunction))
 
 (defun hhub-execute-pending-upi-task (utrnum &optional (cancel nil))
+  "按 utrnum 取出回调：
+     cancel=nil（确认到账）→ 执行回调，再从表中移除；
+     cancel=T（驳回）       → 不执行，仅移除。
+   备注：移除是无条件的，避免下次误触发。"
   (let ((func (gethash utrnum *HHUBPENDINGUPIFUNCTIONS-HT*)))
-    (if (and func (not cancel)) 
+    (if (and func (not cancel))
 	(funcall func))
     (remhash utrnum *HHUBPENDINGUPIFUNCTIONS-HT*)))
 
 (defun save-upi-transaction (amount utrnum transaction-id customer vendor company phone)
-  :description "Save the UPI transaction to the DB and return the domain object."
+  :description "Save the UPI transaction to the DB and return the domain object.
+   中文：通用包装——构造 RequestModel 与 Adapter，调 ProcessCreateRequest 落库；
+        并注册一个 no-op 的 pending task（占位，未来可改为业务回调）。"
   (let* ((requestmodel (make-instance 'UpiPaymentsRequestModel
 					:vendor vendor
 					:customer customer
@@ -318,7 +418,9 @@
 
 
 (defun vendor-upi-payment-confirm (utrnum vendor company)
-  :description "Update the UPI transaction with vendorconfirm and status fields set"
+  :description "Update the UPI transaction with vendorconfirm and status fields set.
+   中文：卖家会话内调用，把指定 utrnum 的 UPI 流水标记为已收款（vendorconfirm='Y',
+        status='CNF'）。底层走 Adapter.ProcessUpdateRequest → Service.doupdate。"
   (with-vend-session-check
     (let* ((requestmodel (make-instance 'UpiPaymentsRequestModel
 					:vendor vendor
@@ -331,7 +433,8 @@
 	(ProcessUpdateRequest upipaymentsadapter requestmodel))))
     
 (defun vendor-upi-payment-cancel (utrnum vendor company)
-  :description "Update the UPI transaction with vendorconfirm and status fields set"
+  :description "Update the UPI transaction with vendorconfirm and status fields set.
+   中文：卖家驳回某 UPI 流水，置 vendorconfirm='N'、status='CAN'（doupdate 内部完成）。"
   (with-vend-session-check
     (let* ((requestmodel (make-instance 'UpiPaymentsRequestModel
 					:vendor vendor
@@ -344,6 +447,8 @@
 	(ProcessUpdateRequest upipaymentsadapter requestmodel))))
 
 (defun hhub-controller-vendor-upi-cancel ()
+  "URL 控制器：路由 hhubvendupipaycancel。卖家驳回某 utrnum：
+   ① 改库 (CAN/N)；② cancel=T 丢弃 pending task；③ redirect 回流水列表。"
   (with-vend-session-check
     (let* ((utrnum (hunchentoot:parameter "utrnum"))
 	   (vendor (get-login-vendor))
@@ -354,6 +459,9 @@
 
 
 (defun hhub-controller-vendor-upi-confirm ()
+  "URL 控制器：路由 hhubvendupipayconfirm。卖家确认到账某 utrnum：
+   ① 改库 (CNF/Y)；② 执行该 utrnum 上注册的 pending task（如钱包加余额）；
+   ③ redirect 回流水列表。"
   (with-vend-session-check
     (let* ((utrnum (hunchentoot:parameter "utrnum"))
 	   (vendor (get-login-vendor))
@@ -363,6 +471,10 @@
       (hunchentoot:redirect "/hhub/hhubvendorupitransactions"))))
 
 (defun create-model-for-showvendorupitransactions ()
+  "卖家 UPI 流水列表 model：
+   通过 Adapter.ProcessReadAllRequest 取近 60 天 UPI 流水，
+   再经 Presenter.CreateAllViewModel 生成 ViewModel 列表。
+   返回：lambda → (values viewallmodel htmlview)。"
   (let* ((vendor (get-login-vendor))
 	 (company (get-login-vendor-company))
 	 (upipaymentspresenter (make-instance 'UpiPaymentsPresenter))
@@ -378,7 +490,8 @@
       (values viewallmodel htmlview)))))
 
 (defun create-widgets-for-showvendorupitransactions (modelfunc)
-	   ;; this is the view. 
+  "卖家 UPI 流水列表 view：单个 widget，调 RenderListViewHTML 把列表渲染成表格。"
+	   ;; this is the view.
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
@@ -389,15 +502,24 @@
 
 
 (defun hhub-controller-show-vendor-upi-transactions ()
+  "URL 控制器：路由 hhubvendorupitransactions。卖家维度 UPI 流水列表页。"
   (with-vend-session-check
     (with-mvc-ui-page "Vendor UPI Transactions" #'create-model-for-showvendorupitransactions #'create-widgets-for-showvendorupitransactions :role :vendor)))
-  
+
 (defmethod RenderListViewHTML ((htmlview UPIPaymentsHTMLView) viewmodellist)
+  "把 ViewModel 列表渲染成 7 列表格：Date / Customer / Phone / Amount / UTR / Status / Action。
+   空列表时不渲染。"
   (unless (= (length viewmodellist) 0)
     (display-as-table (list "Date" "Customer" "Phone" "Amount" "UTR Number" "Status" "Action") viewmodellist 'display-upi-transaction-row)))
 
 
 (defun display-upi-transaction-row (upiviewmodel &rest arguments)
+  "渲染流水表格的一行：
+   - 7 个 td 字段；
+   - Action 列含订单详情模态框 + 根据 (vendorconfirm, status) 三态：
+     · ('N','CAN') → \"Payment Not Received\"；
+     · ('N',_)    → \"Confirm UPI Payment\" 模态触发器（弹 modal.vendor-upi-payment-confirm）；
+     · ('Y','CNF') → \"Received\"。"
   (declare (ignore arguments))
   (let* ((vendor (slot-value upiviewmodel 'vendor))
 	 (company (slot-value upiviewmodel 'company))
@@ -432,6 +554,10 @@
 		(:td :height "10px" (:i :class "fa fa-inr" :aria-hidden "true") " Received"))))))))))
 
 (defun modal.vendor-upi-payment-confirm (upiviewmodel)
+  "卖家"确认 UPI 到账"模态框正文：内含两个 POST 表单（utrnum 隐藏字段）：
+   - 主按钮 \"Payment Received\" → action=hhubvendupipayconfirm
+   - 次按钮 \"Payment Not Received\" → action=hhubvendupipaycancel
+   两个表单 id 同名（form-vendorupiconfirm），实际是不同的 <form> 元素。"
   (with-slots (utrnum status) upiviewmodel
     (cl-who:with-html-output (*standard-output* nil)
       (with-html-div-row 

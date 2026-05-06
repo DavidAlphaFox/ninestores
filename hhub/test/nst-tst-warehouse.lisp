@@ -1,7 +1,50 @@
-;; -*- mode: common-lisp; coding: utf-8 -*- 
+;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：test —— Warehouse（仓库）实体全功能测试套件
+;;;; 分层：测试套件（集成测试，依赖 DB + WarehouseAdapter + Context Flow Dispatcher）
+;;;; 文件：hhub/test/nst-tst-warehouse.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：覆盖 Warehouse 实体（41 字段，含 GST 合规与所有权字段）的端到端测试。
+;;;;       结构上分七大组：
+;;;;         1) Adapter-based CRUD（DBSave/DBUpdate/DBRead/DBReadAll/DBDelete/DBSearch）
+;;;;         2) Context Flow Dispatcher 入口（test-context-warehouse-*）
+;;;;         3) 路由注册与元数据
+;;;;         4) 字段级校验（GST/邮编/PAN/坐标/所有权类型 等）
+;;;;         5) GST 专项功能（主营地点、e-way 账单、HSN 库存）
+;;;;         6) 所有权专项功能（SELLER_OWNED / BUYER_OWNED / THIRD_PARTY 三种）
+;;;;         7) 表现层（Response→ViewModel、JSON 渲染）
+;;;;       另有 6 个聚合 runner（run-all-warehouse-tests / run-*-tests-only）。
+;;;;
+;;;; 主要导出（核心）：
+;;;;   *warehouse-id*                          — 跨用例传递的仓库主键（CREATE 后写入）
+;;;;   test-warehouse-DBSave / DBUpdate / DBRead / DBReadAll / DBDelete / DBSearch
+;;;;   test-context-warehouse-create/read/readall/update/delete
+;;;;   test-warehouse-route-registration / route-metadata
+;;;;   test-warehouse-validation-*             — 多种字段校验
+;;;;   test-warehouse-primary-location / eway-bill-configuration / hsn-stock-tracking
+;;;;   test-warehouse-seller-owned / buyer-owned-vmi / third-party-3pl
+;;;;   test-warehouse-response-to-viewmodel / json-rendering
+;;;;   run-all-warehouse-tests                 — 完整 runner（按类别打印结果）
+;;;;   run-adapter-tests-only / run-dispatcher-tests-only / run-validation-tests-only /
+;;;;   run-gst-feature-tests-only / run-ownership-tests-only / run-presentation-tests-only
+;;;;
+;;;; 依赖与约定：
+;;;;   - 固定测试夹具：vendor=1, company=2（演示租户），通过 select-vendor-by-id /
+;;;;     select-company-by-id 取得实例。
+;;;;   - 大量真实 DB 写入：DBSave / DBUpdate / DBDelete 会改动数据库；建议在隔离环境跑。
+;;;;   - Context Flow Dispatcher：见 core/nst-bl-conflodis.lisp，按 context-id 路由动作。
+;;;;   - GSTIN/PAN 等数据为合法格式但不应在生产使用。
+;;;;
+;;;; 关联：
+;;;;   下游依赖：warehouse/dod-bl-wrh.lisp（BL）、warehouse/dod-ui-wrh.lisp（Adapter/Presenter）、
+;;;;             core/nst-bl-conflodis.lisp（Dispatcher）、generate-warehouse-uuid /
+;;;;             generate-warehouse-short-code、with-nst-debugger
+;;;; ============================================================================
+
 ;; nst-tst-warehouse.lisp
 ;; UPDATED Test framework for Warehouse entity CRUD operations (41 fields with ownership)
-(in-package :nstores) 
+(in-package :nstores)
+;; *warehouse-id* —— Adapter CRUD 用例间共享的仓库 row-id；DBSave 写入、DBUpdate/DBRead/DBDelete 读取。
 (defparameter *warehouse-id* nil)
 ;;; ===========================================================================
 ;;; TRADITIONAL ADAPTER-BASED TESTS (with all 41 fields including ownership)
@@ -11,7 +54,10 @@
 ;;; CREATE Test
 ;;; ---------------------------------------------------------------------------
 (defun test-warehouse-DBSave ()
-  "Test creating a new warehouse record with full GST compliance and ownership fields"
+  "Test creating a new warehouse record with full GST compliance and ownership fields.
+   中文：CREATE 用例。构造一个 41 字段齐全的 WarehouseRequestModel（孟买地址、
+   GSTIN 27AABCU9603R1ZM、SELLER_OWNED 所有权），调用 ProcessCreateRequest。
+   副作用：真实写库；成功时把生成的 row-id 写入全局 *warehouse-id*。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -74,7 +120,10 @@
 ;;; UPDATE Test
 ;;; ---------------------------------------------------------------------------
 (defun test-warehouse-DBUpdate ()
-  "Test updating an existing warehouse record with GST and ownership fields"
+  "Test updating an existing warehouse record with GST and ownership fields.
+   中文：UPDATE 用例。以 *warehouse-id* 为主键改地址/经理/电话/邮编，并把
+   ownership-type 从 SELLER_OWNED 改为 THIRD_PARTY，模拟 3PL 接管。
+   依赖：必须先成功跑过 test-warehouse-DBSave（*warehouse-id* 非 nil）。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -137,7 +186,8 @@
 ;;; READ Test (Single Warehouse)
 ;;; ---------------------------------------------------------------------------
 (defun test-warehouse-DBRead ()
-  "Test reading a single warehouse record with all fields including ownership"
+  "Test reading a single warehouse record with all fields including ownership.
+   中文：READ 用例。按 *warehouse-id* 读取仓库实例并校验全部字段可访问。"
   (let* ((company (select-company-by-id 2))
          (warehouse-name "Main Distribution Center")
          (requestmodel (make-instance 'WarehouseRequestModel 
@@ -171,7 +221,8 @@
 ;;; READ ALL Test
 ;;; ---------------------------------------------------------------------------
 (defun test-warehouse-DBReadAll ()
-  "Test reading all warehouse records for a vendor"
+  "Test reading all warehouse records for a vendor.
+   中文：READALL 用例。按 vendor=1 + company=2 列出所有仓库并打印名称/类型/所有权。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (requestmodel (make-instance 'WarehouseRequestModel 
@@ -195,7 +246,8 @@
 ;;; DELETE Test
 ;;; ---------------------------------------------------------------------------
 (defun test-warehouse-DBDelete ()
-  "Test soft deleting a warehouse record"
+  "Test soft deleting a warehouse record.
+   中文：DELETE 用例（软删，推测是 deleted-state=Y）。按 *warehouse-id* 删除，再无 row 可读。"
   (let* ((company (select-company-by-id 2))
 	 (warehouse-name "Main Distribution Center")
          (requestmodel (make-instance 'WarehouseRequestModel 
@@ -215,7 +267,9 @@
 ;;; SEARCH Test (by partial name match)
 ;;; ---------------------------------------------------------------------------
 (defun test-warehouse-DBSearch ()
-  "Test searching warehouses by partial name"
+  "Test searching warehouses by partial name.
+   中文：SEARCH 用例。用 WarehouseSearchRequestModel + 关键字 \"Distribution\"，
+   走 ProcessReadAllRequest 的 LIKE 通道（推测）。"
   (let* ((company (select-company-by-id 2))
          (search-term "Distribution")
          (requestmodel (make-instance 'WarehouseSearchRequestModel 
@@ -239,7 +293,10 @@
 ;;; Test Context Flow Dispatcher - CREATE
 ;;; ---------------------------------------------------------------------------
 (defun test-context-warehouse-create ()
-  "Test warehouse creation using context flow dispatcher with ownership fields"
+  "Test warehouse creation using context flow dispatcher with ownership fields.
+   中文：Context Flow Dispatcher CREATE 入口。把 raw-params plist 喂给
+   dispatch-route :warehouse/create，由 Dispatcher 做参数→RequestModel 映射后
+   再走 Adapter 业务路径。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -308,7 +365,9 @@
 ;;; Test Context Flow Dispatcher - READ
 ;;; ---------------------------------------------------------------------------
 (defun test-context-warehouse-read ()
-  "Test warehouse read using context flow dispatcher"
+  "Test warehouse read using context flow dispatcher.
+   中文：Dispatcher READ 入口；request-uri /hhub/vreadwarehouse/、
+   trans-func com-hhub-transaction-read-warehouse；输出 JSON。"
   (let* ((company (select-company-by-id 2))
          (raw-params (list :wname "Context Flow Warehouse"
 			   :row-id *warehouse-id*
@@ -328,7 +387,9 @@
 ;;; Test Context Flow Dispatcher - READALL
 ;;; ---------------------------------------------------------------------------
 (defun test-context-warehouse-readall ()
-  "Test warehouse readall using context flow dispatcher with vendor"
+  "Test warehouse readall using context flow dispatcher with vendor.
+   中文：Dispatcher READALL 入口；request-uri /hhub/vreadallwarehouse、
+   trans-func com-hhub-transaction-readall-warehouse；按 vendor 列出。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (raw-params (list :company company :vendor vendor)))
@@ -348,7 +409,9 @@
 ;;; Test Context Flow Dispatcher - UPDATE
 ;;; ---------------------------------------------------------------------------
 (defun test-context-warehouse-update ()
-  "Test warehouse update using context flow dispatcher with ownership changes"
+  "Test warehouse update using context flow dispatcher with ownership changes.
+   中文：Dispatcher UPDATE 入口；演示把所有权改为 BUYER_OWNED（VMI 寄售场景），
+   warehouse-type 改为 CONSIGNMENT，valuation-method 改为 LIFO。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -410,7 +473,8 @@
 ;;; Test Context Flow Dispatcher - DELETE
 ;;; ---------------------------------------------------------------------------
 (defun test-context-warehouse-delete ()
-  "Test warehouse delete using context flow dispatcher"
+  "Test warehouse delete using context flow dispatcher.
+   中文：Dispatcher DELETE 入口；request-uri /hhub/vdeletewarehouse/。"
   (let* ((company (select-company-by-id 2))
          (raw-params (list :wname "Context Flow Warehouse"
 			   :row-id *warehouse-id*
@@ -431,7 +495,9 @@
 ;;; ===========================================================================
 
 (defun test-warehouse-route-registration ()
-  "Test that all warehouse routes are properly registered"
+  "Test that all warehouse routes are properly registered.
+   中文：检查 :warehouse/{create,read,readall,update,delete} 五条路由是否
+   已通过 find-outbound-route 注册到 Dispatcher 路由表。"
   (format t "~%Testing warehouse route registration...~%")
   (let ((routes '(:warehouse/create 
                   :warehouse/read 
@@ -452,7 +518,9 @@
     all-registered))
 
 (defun test-warehouse-route-metadata ()
-  "Test that warehouse routes have correct metadata"
+  "Test that warehouse routes have correct metadata.
+   中文：打印 :warehouse/create 路由全部元数据（CRUD 操作、Adapter/Presenter 类、
+   所需角色、审计级别、特性开关等），用于人工核对路由配置。"
   (format t "~%Testing warehouse route metadata...~%")
   (let ((route (find-outbound-route :warehouse/create)))
     (when route
@@ -474,7 +542,8 @@
 ;;; ===========================================================================
 
 (defun test-warehouse-validation-empty-name ()
-  "Test validation for empty warehouse name"
+  "Test validation for empty warehouse name.
+   中文：负向用例。wname 为空字符串应被 Adapter 校验拒绝。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -495,7 +564,8 @@
         (format t "✓ Validation PASSED - empty name rejected: ~A~%" c)))))
 
 (defun test-warehouse-validation-invalid-ownership ()
-  "Test validation for missing required ownership fields"
+  "Test validation for missing required ownership fields.
+   中文：负向用例。缺失 owner-entity-id 应被拒绝（所有权三件套必须完整）。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (requestmodel (make-instance 'WarehouseRequestModel 
@@ -515,7 +585,8 @@
         (format t "✓ Validation PASSED - missing owner-entity-id rejected: ~A~%" c)))))
 
 (defun test-warehouse-validation-invalid-pin ()
-  "Test validation for invalid PIN code (too long)"
+  "Test validation for invalid PIN code (too long).
+   中文：负向用例。8 位邮编（应为 6 位）应被校验拒绝。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -537,7 +608,8 @@
         (format t "✓ Validation PASSED - invalid PIN rejected: ~A~%" c)))))
 
 (defun test-warehouse-validation-invalid-gstin ()
-  "Test validation for invalid GSTIN format"
+  "Test validation for invalid GSTIN format.
+   中文：负向用例。非法 GSTIN（应为 15 位结构化字符串）应被拒绝。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -559,7 +631,8 @@
         (format t "✓ Validation PASSED - invalid GSTIN rejected: ~A~%" c)))))
 
 (defun test-warehouse-validation-invalid-state-code ()
-  "Test validation for invalid state code (not 2 digits)"
+  "Test validation for invalid state code (not 2 digits).
+   中文：负向用例。state-code 应为 2 位（如 \"27\"），传 \"999\" 应被拒。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -581,7 +654,8 @@
         (format t "✓ Validation PASSED - invalid state code rejected: ~A~%" c)))))
 
 (defun test-warehouse-validation-invalid-pan ()
-  "Test validation for invalid PAN format"
+  "Test validation for invalid PAN format.
+   中文：负向用例。PAN 应固定 10 位，本例 \"INVALIDPAN123\" 超长应被拒。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -603,7 +677,8 @@
         (format t "✓ Validation PASSED - invalid PAN rejected: ~A~%" c)))))
 
 (defun test-warehouse-validation-gps-coordinates ()
-  "Test validation for GPS coordinates range"
+  "Test validation for GPS coordinates range.
+   中文：负向用例。经纬度都设为 200.0（超出 ±90 / ±180 范围）应被拒绝。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -630,7 +705,9 @@
 ;;; ===========================================================================
 
 (defun test-warehouse-primary-location ()
-  "Test primary warehouse location functionality with ownership"
+  "Test primary warehouse location functionality with ownership.
+   中文：先创建 is-primary-location=1 的主仓，再创建一个 is-primary-location=0 的副仓，
+   验证两条记录都能落库且主仓标志独立。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -729,7 +806,8 @@
         (format t "✗ Primary location test failed: ~A~%" c)))))
 
 (defun test-warehouse-eway-bill-configuration ()
-  "Test e-way bill enabled/disabled functionality"
+  "Test e-way bill enabled/disabled functionality.
+   中文：创建 eway-bill-enabled=1 的仓库并验证回读字段相等。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -785,7 +863,8 @@
         (format t "✗ E-Way bill test failed: ~A~%" c)))))
 
 (defun test-warehouse-hsn-stock-tracking ()
-  "Test HSN-wise stock tracking configuration"
+  "Test HSN-wise stock tracking configuration.
+   中文：创建并验证 hsn-wise-stock 标志（按 HSN 编码追踪库存）的开关。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -846,7 +925,9 @@
 ;;; ===========================================================================
 
 (defun test-warehouse-seller-owned ()
-  "Test SELLER_OWNED warehouse creation"
+  "Test SELLER_OWNED warehouse creation.
+   中文：自营仓场景。owner/operator/legal 三类实体都是 SELLER，
+   warehouse-type=OWN，断言回读 ownership-type==\"SELLER_OWNED\"。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -902,7 +983,9 @@
         (format t "✗ SELLER_OWNED test failed: ~A~%" c)))))
 
 (defun test-warehouse-buyer-owned-vmi ()
-  "Test BUYER_OWNED warehouse (VMI scenario)"
+  "Test BUYER_OWNED warehouse (VMI scenario).
+   中文：买家寄售/VMI 场景。owner=BUYER 但 operator=SELLER（卖家代管），
+   warehouse-type=CONSIGNMENT；断言回读 ownership-type 与 warehouse-type 匹配。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -959,7 +1042,8 @@
         (format t "✗ BUYER_OWNED VMI test failed: ~A~%" c)))))
 
 (defun test-warehouse-third-party-3pl ()
-  "Test THIRD_PARTY warehouse (3PL scenario)"
+  "Test THIRD_PARTY warehouse (3PL scenario).
+   中文：第三方物流（3PL）场景。所有权 THIRD_PARTY，断言回读字段相等。"
   (let* ((company (select-company-by-id 2))
          (vendor (select-vendor-by-id 1))
          (vendor-id (slot-value vendor 'row-id))
@@ -1019,7 +1103,8 @@
 ;;; ===========================================================================
 
 (defun test-warehouse-response-to-viewmodel ()
-  "Test ResponseModel to ViewModel transformation with all 41 fields"
+  "Test ResponseModel to ViewModel transformation with all 41 fields.
+   中文：表现层用例。验证 WarehouseResponseModel → ViewModel 的字段映射全 41 字段无丢失。"
   (let* ((company (select-company-by-id 2))
 	 (vendor (select-vendor-by-id 1))
 	 (vendor-id (slot-value vendor 'row-id))
@@ -1081,7 +1166,9 @@
         (format t "✗ ViewModel creation failed: ~A~%" c)))))
 
 (defun test-warehouse-json-rendering ()
-  "Test JSON rendering of warehouse viewmodel with all 41 fields including ownership"
+  "Test JSON rendering of warehouse viewmodel with all 41 fields including ownership.
+   中文：表现层用例。WarehouseViewModel 经 WarehouseJSONView.RenderJSON 渲染，
+   断言输出非空且打印长度。"
   (let* ((company (select-company-by-id 2))
 	 (vendor (select-vendor-by-id 1))
 	 (vendor-id (slot-value vendor 'row-id))
@@ -1142,7 +1229,10 @@
 ;;; ===========================================================================
 
 (defun run-all-warehouse-tests ()
-  "Run all warehouse test cases in sequence (41 fields with ownership)"
+  "Run all warehouse test cases in sequence (41 fields with ownership).
+   中文：完整 runner。按 7 个 PART 顺序执行 25+ 个测试，
+   每个测试用 handler-case 包裹，失败不中断后续。
+   注意：会真实多次写库；建议在测试库执行。"
   (format t "~%~%=======================================================~%")
   (format t "   WAREHOUSE ENTITY COMPREHENSIVE TEST SUITE~%")
   (format t "   (Updated with 41 fields including ownership model)~%")
@@ -1296,7 +1386,8 @@
 ;;; ===========================================================================
 
 (defun run-adapter-tests-only ()
-  "Run only traditional adapter-based tests"
+  "Run only traditional adapter-based tests.
+   中文：仅跑 Adapter CRUD（DBSave→Read→ReadAll→Update→Delete）。"
   (format t "~%Running traditional adapter tests (with ownership)...~%")
   (test-warehouse-DBSave)
   (test-warehouse-DBRead)
@@ -1305,7 +1396,8 @@
   (test-warehouse-DBDelete))
 
 (defun run-dispatcher-tests-only ()
-  "Run only context flow dispatcher tests"
+  "Run only context flow dispatcher tests.
+   中文：仅跑 Dispatcher 入口的 5 个 CRUD 用例。"
   (format t "~%Running context flow dispatcher tests (with ownership)...~%")
   (test-context-warehouse-create)
   (test-context-warehouse-read)
@@ -1314,7 +1406,8 @@
   (test-context-warehouse-delete))
 
 (defun run-validation-tests-only ()
-  "Run only validation tests"
+  "Run only validation tests.
+   中文：仅跑负向校验用例（7 个）。"
   (format t "~%Running validation tests (including ownership)...~%")
   (test-warehouse-validation-empty-name)
   (test-warehouse-validation-invalid-ownership)
@@ -1325,21 +1418,24 @@
   (test-warehouse-validation-gps-coordinates))
 
 (defun run-gst-feature-tests-only ()
-  "Run only GST-specific feature tests"
+  "Run only GST-specific feature tests.
+   中文：仅跑 GST 专项（主仓、e-way 账单、HSN 库存）。"
   (format t "~%Running GST-specific feature tests...~%")
   (test-warehouse-primary-location)
   (test-warehouse-eway-bill-configuration)
   (test-warehouse-hsn-stock-tracking))
 
 (defun run-ownership-tests-only ()
-  "Run only ownership model tests (NEW)"
+  "Run only ownership model tests (NEW).
+   中文：仅跑所有权模型 3 类（SELLER_OWNED / BUYER_OWNED-VMI / THIRD_PARTY-3PL）。"
   (format t "~%Running ownership model tests...~%")
   (test-warehouse-seller-owned)
   (test-warehouse-buyer-owned-vmi)
   (test-warehouse-third-party-3pl))
 
 (defun run-presentation-tests-only ()
-  "Run only presentation layer tests"
+  "Run only presentation layer tests.
+   中文：仅跑表现层（ViewModel 与 JSON 渲染）。"
   (format t "~%Running presentation layer tests (with ownership)...~%")
   (test-warehouse-response-to-viewmodel)
   (test-warehouse-json-rendering))

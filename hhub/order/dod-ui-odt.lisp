@@ -1,8 +1,38 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：order 订单 —— 订单行项 UI（旧 dod-* MVC，含 MVC 三段：model/widgets/controller）
+;;;; 分层：UI（控制器 + CL-WHO 模板）
+;;;; 文件：hhub/order/dod-ui-odt.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：客户/卖家订单详情页相关的行项编辑、订单头展示、购物车列表渲染、
+;;;;       行项金额计算辅助。属于旧版 MVC 风格；新风格请见 nst-ui-OrderItem.lisp。
+;;;;
+;;;; 主要导出：
+;;;;   com-hhub-transaction-cust-edit-order-item    — 客户编辑订单行项数量（PEP 入口）
+;;;;   create-model-for-transcusteditorderitem      — 该事务的 model 部分
+;;;;   create-widgets-for-transcusteditorderitem    — widgets 部分（仅返回重定向）
+;;;;   order-item-edit-popup                        — 行项编辑弹窗 HTML
+;;;;   dod-controller-list-order-details / ui-list-order-details — 行项列表（CAD 视角）
+;;;;   ui-list-shopcart / -readonly / -for-email    — 购物车不同呈现
+;;;;   calculate-order-item-cost                    — 单行项金额（含折扣 + GST）
+;;;;   ui-list-cust-orderdetails                    — 客户视角行项列表 + 编辑/删除按钮
+;;;;   modal.cust-delete-order-item                 — 客户删行项确认 modal
+;;;;   display-order-header-for-customer / -for-vendor — 订单头摘要
+;;;;
+;;;; 关联：
+;;;;   上游使用方：客户 PWA 订单详情页、卖家后台订单详情页
+;;;;   下游依赖：order/dod-bl-odt.lisp、wallet BL（PRE 余额校验）、product BL
+;;;; ============================================================================
+
 (in-package :nstores)
 
 ;;;;;;;;;;; CUSTOMER ORDER EDIT ;;;;;;;;;;;;;;;;;
 (defun create-model-for-transcusteditorderitem ()
+  "中文：客户编辑行项数量事务的 model 函数。
+   流程：with-hhub-transaction 包裹 PEP 鉴权 → 取 item-id/order-id/prdqty → 计算库存差额 →
+        若 PRE 预付方式则校验 wallet 余额（不足则跳低余额页）→ 写库 update-order-item +
+        update-prd-details + 重算订单 order-amt + 刷新会话 :login-cusord-cache。
+   返回：闭包，调用后 (values redirectlocation)。"
   (let ((params nil))
     (setf params (acons "uri" (hunchentoot:request-uri*)  params))
     (setf params (acons "company" (get-login-customer-company) params))
@@ -43,19 +73,25 @@
 	  (values redirectlocation)))))))
 
 (defun create-widgets-for-transcusteditorderitem (modelfunc)
+  "中文：widgets 部分。从 model 闭包取 redirectlocation 后包装为 widget 列表。"
   (multiple-value-bind (redirectlocation) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     redirectlocation))))
       (list widget1))))
 
 (defun com-hhub-transaction-cust-edit-order-item ()
+  "中文：客户编辑订单行项数量的 ABAC 事务入口。
+   会话：with-cust-session-check（必须客户登录）。
+   行为：通过 with-mvc-redirect-ui 调度 model + widgets，最终返回重定向 URI。"
   (with-cust-session-check
     (let ((uri (with-mvc-redirect-ui #'create-model-for-transcusteditorderitem #'create-widgets-for-transcusteditorderitem)))
       (format nil "~A" uri))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(defun order-item-edit-popup (item-id) 
+(defun order-item-edit-popup (item-id)
+  "中文：渲染'修改行项数量'弹窗：商品图、商品名、数量滑块、提交到 dodcustorditemedit。
+   滑块上限是 (max (mod units-in-stock 20) 10) —— 保留原作者算法，不展开判断业务意图。"
   (let* ((order-item (get-order-item-by-id item-id))
 	 (itemqty (slot-value order-item 'prd-qty))
 	 (order-id (slot-value order-item 'order-id))
@@ -82,6 +118,9 @@
 			  (:input :type "submit"  :class "btn btn-primary" :value "Save"))))))))
 
 (defun dod-controller-list-order-details ()
+  "中文：CAD/旧后台订单详情控制器。
+   会话：is-dod-session-valid?，未登录跳转 /login。
+   行为：取 id 参数对应订单，列出其行项；空列表返回 'No order details'。"
     (if (is-dod-session-valid?)
 	(let* (( dodorder (get-order-by-id (hunchentoot:parameter "id") (get-login-company)))
 		  (header (list  "Order No" "Product" "Product Qty" "Unit Price"  "Total"  "Action"))
@@ -91,8 +130,9 @@
 
 
 (defun ui-list-order-details (header data)
+  "中文：把行项列表渲染成表格，每行末尾给出 Delete / Edit 链接。"
     (cl-who:with-html-output (*standard-output* nil)
-	(:h3 "Order Details") 
+	(:h3 "Order Details")
 	(:table :class "table table-striped"  (:thead (:tr
 				 (mapcar (lambda (item) (cl-who:htm (:th (cl-who:str item)))) header))) (:tbody
 				       (mapcar (lambda (odt)
@@ -107,7 +147,9 @@
 
 
 (defun ui-list-shopcart (products shopcart)
-    :documentation "A function used for rendering the shopping cart data in HTML format."
+    :documentation "A function used for rendering the shopping cart data in HTML format.
+     中文：可编辑购物车渲染。products 与 shopcart（dod-order-items 列表）位置一一对应；
+     每行渲染为 product-card-shopcart 卡片。"
     (cl-who:with-html-output-to-string (*standard-output* nil)
       (:div :class "product-card-row"
 	    (mapcar (lambda (column)
@@ -119,7 +161,8 @@
 
 
 (defun ui-list-shopcart-readonly (products shopcart)
-    :documentation "A function used for rendering the shopping cart data in HTML format."
+    :documentation "A function used for rendering the shopping cart data in HTML format.
+     中文：只读购物车渲染（结账后展示）。表头含 GST 三列。"
     (cl-who:with-html-output (*standard-output* nil)
       (:div :class "all-products-row"
 	    (:table :class "table table-sm  table-striped  table-hover"
@@ -133,14 +176,20 @@
 
 
 (defun ui-list-shopcart-for-email (products shopcart)
-    :documentation "A function used for rendering the shopping cart data in HTML EMAIL format."
+    :documentation "A function used for rendering the shopping cart data in HTML EMAIL format.
+     中文：邮件版购物车（带边框 table），用于订单确认邮件正文。"
   (with-html-table "" (list "Product" "Description" "Qty" "Subtotal") "1"  
     (mapcar (lambda (product odt)
 	      (product-card-for-email product odt))  products shopcart )))
 
 
 (defun calculate-order-item-cost (order-item)
-  :description "calculates the order item cost with respect to the unit price, discount, and tax rates if applicable"
+  :description "calculates the order item cost with respect to the unit price, discount, and tax rates if applicable
+   中文：行项金额计算（不含数量）。
+   公式：discount 存在时 = unit-price - unit-price*disc/100 + sgstamt+cgstamt+igstamt
+        否则       = unit-price + sgstamt+cgstamt+igstamt
+   返回：浮点合计。
+   备注：注意是 :description 关键字而非 :documentation，仍为 noop 表达式。"
   (let* ((discount (slot-value order-item 'disc-rate)) 
 	 (unit-price (slot-value order-item 'unit-price))
 	 (sgstamt (check-null (slot-value order-item 'sgstamt)))
@@ -154,6 +203,10 @@
 
 
 (defun ui-list-cust-orderdetails  (header data)
+  "中文：客户'我的订单'详情中的行项表。
+   - PEN+未履约 → 显示 'Pending'，附编辑/删除按钮（弹窗）。OPY 支付方式禁用编辑（推测：已支付不可改）。
+   - CMP+履约 → 显示 'Fulfilled'。
+   底部内联 JS 拦截表单提交并通过 submitformandredirect 走 AJAX。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :id "idlistcustorderitems"  :class  "panel panel-default"
 	  (:div :class "panel-heading" "Order Items")
@@ -205,6 +258,7 @@
 });")))
 
 (defun modal.cust-delete-order-item (item order-id)
+  "中文：客户删除单个行项的确认 modal 内容。表单提交到 doddelcustorditem。"
   (let* ((id (slot-value item 'row-id))
 	 (item-product (get-item-product item))
          (prd-name (slot-value item-product 'prd-name)))
@@ -216,6 +270,8 @@
 	(:input :type "submit" :class "btn btn-lg btn-danger"  :value "Delete")))))
 
 (defun create-model-for-displayordheaderforcust (order-instance)
+  "中文：客户视角订单头摘要的 model：抽出订单号、支付方式（PRE/COD 翻译为人类语）、状态、
+   下单/期望/发货日、备注，包装为闭包多值返回。"
   (let* ((payment-mode (slot-value order-instance 'payment-mode))
 	 (orderid (slot-value order-instance 'row-id))
 	 (payment-mode (cond ((equal payment-mode "PRE") "Prepaid Wallet")
@@ -229,6 +285,7 @@
       (values orderid payment-mode orderstatus orderdate reqdate shipped-date comments)))))
 
 (defun create-widgets-for-displayorderheaderforcust (modelfunc)
+  "中文：客户订单头摘要的 widgets：jumbotron 三列展示订单号/支付方式/状态/各日期/备注。"
   (multiple-value-bind (orderid payment-mode orderstatus orderdate reqdate shipped-date comments) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -248,11 +305,14 @@
 
 
 (defun display-order-header-for-customer (order-instance)
+  "中文：客户订单头摘要 UI 入口（绑定上面 model+widgets）。"
   (with-mvc-ui-component #'create-widgets-for-displayorderheaderforcust #'create-model-for-displayordheaderforcust order-instance))
 
 
 
 (defun create-model-for-displayorderheaderforvendor (order-instance)
+  "中文：卖家视角订单头 model：含客户钱包余额（PRE 才查）、客户类型、收货地址、订单履约标志等。
+   STANDARD 客户暴露 ship-address；GUEST 仅在评论位展示订单 comments。"
   (let* ((customer (get-customer order-instance))
 	 (wallet (if customer (get-cust-wallet-by-vendor customer (get-login-vendor) (get-login-vendor-company))))
 	 (balance (if wallet (slot-value wallet 'balance) 0))
@@ -271,6 +331,8 @@
       (values orderid payment-mode balance customer-phone ship-address cust-type orderstatus reqdate shipped-date orderdate comments order-fulfilled)))))
 
 (defun create-widgets-for-displayorderheaderforvendor (modelfunc)
+  "中文：卖家订单头 widgets：4 列 panel 显示客户/支付方式/钱包余额/电话/收货地址/状态/各日期；
+   order-fulfilled='Y' 时叠加旋转的 'FULFILLED' 印章样式。"
   (multiple-value-bind (orderid payment-mode balance customer-phone ship-address cust-type orderstatus reqdate shipped-date orderdate comments order-fulfilled) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -308,4 +370,5 @@
       (list widget1))))
 
 (defun display-order-header-for-vendor (order-instance)
+  "中文：卖家订单头摘要 UI 入口。"
   (with-mvc-ui-component #'create-widgets-for-displayorderheaderforvendor #'create-model-for-displayorderheaderforvendor order-instance))

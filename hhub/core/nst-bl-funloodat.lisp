@@ -1,4 +1,23 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— Function Lookup Data（自动生成的数据）
+;;;; 分层：BL（业务逻辑层 —— 但本文件本质是巨大的常量数据）
+;;;; 文件：hhub/core/nst-bl-funloodat.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：单一函数 function-lookup-table，返回闭包；闭包内部 quote 一个超大
+;;;;       (function-name function-type source-file ...) 五元组列表，
+;;;;       覆盖整个仓库里的所有 function/generic-function/macro/clos-method
+;;;;       声明，用于"按名跳转源码"等开发期工具支持。
+;;;;
+;;;; 警告：本文件 ~250 KB，由工具脚本自动生成（不是手写）。
+;;;;       请勿手工编辑函数体；如需更新请重新跑生成器。
+;;;;
+;;;; 主要导出：
+;;;;   function-lookup-table   — 返回闭包，调用得到 alist 数据
+;;;;
+;;;; 关联：
+;;;;   上游使用方：开发期符号导航 / xref.lisp 配套工具
+;;;; ============================================================================
 ;; nst-bl-funloodat.lisp came from Function Lookup Data
 (in-package :nstores)
 

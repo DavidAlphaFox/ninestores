@@ -1,6 +1,28 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：invoice 发票 —— 发票设置默认模板
+;;;; 分层：平台基础（默认配置数据）
+;;;; 文件：hhub/invoice/templates/invoicesettings.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：声明发票相关默认配置常量。包含两个并存的数据结构：
+;;;;       *invoice-settings-alist*  扁平 alist 形式（点号路径键）
+;;;;       *invoice-settings*        嵌套 alist 形式（按分组）
+;;;;       覆盖打印设置、币种、邮件、客户、折扣、PDF、安全、Webhook、
+;;;;       通知等子部分。属于平台默认值，部署后由各租户在 UI 中覆盖。
+;;;;
+;;;; 主要导出：
+;;;;   *invoice-settings-alist*  — 扁平默认配置 alist
+;;;;   *invoice-settings*        — 嵌套默认配置树
+;;;;   update-config             — 更新嵌套结构里的某个 key
+;;;;
+;;;; 关联：
+;;;;   上游使用方：invoice/nst-bl-ihd.lisp / nst-ui-ihd.lisp（发票设置 UI）
+;;;;   下游依赖：无（纯数据）
+;;;; ============================================================================
+
 (in-package :nstores)
 
+;; 扁平 alist：键为 "section.path.key" 的形式，便于直接 assoc 取值
 (defparameter *invoice-settings-alist*
   '((invoice-print-settings.default-paper-size . "A4")
     (invoice-print-settings.orientation . "portrait")
@@ -25,6 +47,8 @@
     (invoice-general-settings.enable-discounts . t)
     (invoice-general-settings.default-discount-rate . 5)))
 
+;; 嵌套结构：按 section（打印 / 通用 / 邮件 / 客户 / 折扣税 / 分享 / 在线发票 /
+;; PDF / 安全 / 高级 / 通知告警）分组，便于 UI 渲染分块
 (defparameter *invoice-settings*
   '((invoice-print-settings
       (default-paper-size "A4")
@@ -129,7 +153,11 @@
 
 
 (defun update-config (config section key new-value)
-  "Update a specific KEY in SECTION of config*invoice-settings* to NEW-VALUE."
+  "Update a specific KEY in SECTION of config*invoice-settings* to NEW-VALUE.
+   中文：更新嵌套配置结构中指定 section/key 的值。
+   参数：config — 嵌套 alist；section — 分组符号；key — 项符号；new-value — 新值。
+   返回：new-value（setf 形式），未找到 section 时返回 nil。
+   备注：仅原地修改 cons 单元，不做拷贝；非线程安全。"
   (let ((section-list (assoc section config)))
     (when section-list
       (setf (cdr (assoc key section-list)) new-value))))

@@ -1,11 +1,63 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：sysuser —— 超级管理员（OPR / SADMIN）后台 + 系统级路由表
+;;;; 分层：UI（控制器 + CL-WHO 模板）
+;;;; 文件：hhub/sysuser/dod-ui-sys.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：本文件是整个 Nine Stores 的 *中心路由* 与 *系统超管 (SADMIN/OPR) 后台*：
+;;;;   - 通用：权限拒绝页、OTP 流程（请求 / 提交 / 重发）
+;;;;   - 超管：登录 / 注销 / 主页 / 个人资料 / 仪表盘
+;;;;   - 公司账户运维：suspend / restore / 创建公司 / 新公司申请页 / 列表搜索
+;;;;   - 系统运维：DB 重置页 + 动作、daily orders 批处理触发
+;;;;   - ABAC 后台：业务对象 / 主体 / 事务 / 属性 列表页
+;;;;   - 路由：在文件末尾用一长串 hunchentoot:create-regex-dispatcher 注册全平台 URL
+;;;;     —— 包括 SADMIN / CAD / Customer / Vendor 各模块所有控制器（约 220 条）。
+;;;;
+;;;; 主要导出：
+;;;;   hhub-controller-permission-denied
+;;;;   dod-controller-OTP-request-page / dod-controller-otp-submit-action /
+;;;;   dod-controller-otp-regenerate-action / generateotp&redirect
+;;;;   com-hhub-transaction-suspend-account / -restore-account
+;;;;   com-hhub-transaction-system-dashboard / -sadmin-profile / -sadmin-home /
+;;;;     -sadmin-login / -refresh-iam-settings / -create-company / -create-company-dialog /
+;;;;     -request-new-company
+;;;;   dod-controller-run-daily-orders-batch
+;;;;   dod-controller-dbreset-page / -dbreset-action
+;;;;   company-search-html / company-subscription-plan-dropdown / company-type-dropdown
+;;;;   dod-controller-new-company-request-page / -new-store-request-step2 /
+;;;;     -new-company-request-email / -company-search-for-sys-action
+;;;;   hhub-controller-new-community-store-request-page
+;;;;   dod-controller-abac-security / -list-busobjs / -list-abac-subjects /
+;;;;     -list-bustrans / -list-attrs
+;;;;   dod-controller-loginpage / -logout
+;;;;   IAM-security-page-header
+;;;;   create-model-for-sadminhome / create-widgets-for-sadminhome
+;;;;   create-model-for-sadminlogin / create-model-for-sadminlogout
+;;;;   is-dod-session-valid? / dod-login / get-tenant-id / get-tenant-name /
+;;;;     get-login-user-object / is-user-already-login? / add-login-user / dod-logout
+;;;;   *logged-in-users* / *current-user-session*
+;;;;   hunchentoot:*dispatch-table* —— 平台总路由表（在文件末尾 setq 一次写完）
+;;;;
+;;;; 关联：
+;;;;   上游：浏览器（基本所有 /hhub/* 路径）
+;;;;   下游：core/dod-ui-utl.lisp（PEP 宏 / MVC 框架）、
+;;;;         products/order/customer/vendor/invoice 等所有控制器（被路由表绑定）
+;;;; ============================================================================
+
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
+;; ----------------------------------------------------------------------------
+;; 全局：本进程内已登录用户表（哈希/列表 表示，由 add-login-user / dod-logout 维护）
+;; 与当前活跃 user-session 引用。
+;; ----------------------------------------------------------------------------
 (defvar *logged-in-users* nil)
 (defvar *current-user-session* nil)
 
 (defun hhub-controller-permission-denied ()
+  "URL：/hhub/permissiondenied。
+   渲染权限拒绝页：图片 + 'Permission Denied' 标题 + 返回按钮，
+   query 参数 message 由 jscript-displayerror 弹窗展示具体原因。"
   (let ((message (hunchentoot:parameter "message")))
     (with-no-navbar-page-v2 "Permission Denied"
       (:div :class "card"
@@ -18,6 +70,9 @@
 
 
 (defun dod-controller-OTP-request-page ()
+  "URL：/hhub/otppage?session=<id>&phone=<10digit>。
+   OTP 输入页：展示掩码电话、输入框、倒计时 + 重发按钮（POST hhubotpregenerateaction）。
+   提交 OTP 走 hhubotpsubmitaction。"
   (let ((session-id (hunchentoot:parameter "session"))
 	(phone (hunchentoot:parameter "phone")))
     (with-no-navbar-page-v2  "OTP Page"
@@ -45,9 +100,13 @@
       (:script "window.onload = function() {countdowntimer(0,0,2,0);}"))))
 
 (defun dod-controller-otp-submit-action ()
+  "URL：/hhub/hhubotpsubmitaction。校验 OTP，根据保存的 context 跳转。"
   (with-mvc-redirect-ui #'create-model-for-otpsubmitaction #'create-widgets-for-genericredirect))
 
 (defun create-model-for-otpsubmitaction ()
+  "OTP 提交 model：从 *otp-store* 取出与 session 绑定的 OTP 与 context；
+   - 与用户输入一致 → 跳转到 /hhub/<context>（之前发起 OTP 时记下的目的地）；
+   - 不一致 → 跳回 *siteurl* 首页。"
   (let* ((otp (hunchentoot:parameter "otp"))
 	 (session (hunchentoot:parameter "session"))
 	 (context (funcall *otp-store* :get-context :session-id session))
@@ -64,6 +123,8 @@
   
 
 (defun dod-controller-otp-regenerate-action ()
+  "URL：/hhub/hhubotpregenerateaction。
+   重发 OTP：从原 session 中取 persona/purpose/context，调用 generateotp&redirect 重新生成。"
   (let* ((session (hunchentoot:parameter "session"))
 	 (phone (hunchentoot:parameter "phone"))
 	 (context (funcall *otp-store* :get-context :session-id session))
@@ -73,7 +134,10 @@
    
 
 (defun generateotp&redirect (persona purpose phone context)
-  :description "This function will generate OTP, save it to the session, send SMS to the phone number with OTP message and then redirect to OTP entering page, also remembering the context where to redirect after entering the OTP successfully."
+  :description "This function will generate OTP, save it to the session, send SMS to the phone number with OTP message and then redirect to OTP entering page, also remembering the context where to redirect after entering the OTP successfully.
+   中文：生成 6 位 OTP（random 999999） + 8 位会话 id，写入 *otp-store*；
+         若 *HHUBOTPTESTING* 真则只写日志（测试模式），否则通过 AWS SNS 发短信。
+         返回字符串：'/hhub/otppage?session=<id>&phone=<phone>' 跳转目标。"
   (let ((otp (random 999999))
 	(session-id (hhub-random-password 8)))
     ;; Set the otp to the session value 
@@ -94,7 +158,8 @@
     (format nil "/hhub/otppage?session=~A&phone=~A" session-id phone)))
 
 (defun com-hhub-transaction-suspend-account ()
-  :documentation "This is a controller method which will suspend an Account"
+  :documentation "This is a controller method which will suspend an Account.
+   中文：URL：/hhub/suspendaccount?tenant-id=<id>。SADMIN/OPR 暂停某租户账户（调 suspendaccount BL）。"
   (with-opr-session-check
     (let ((params nil)
 	  (tenant-id (hunchentoot:parameter "tenant-id")))
@@ -105,7 +170,9 @@
       (hunchentoot:redirect "/hhub/sadminhome"))))
 
 (defun com-hhub-transaction-restore-account ()
-  :documentation "This is a controller method which will suspend an Account"
+  :documentation "This is a controller method which will suspend an Account.
+   中文：URL：/hhub/restoreaccount?tenant-id=<id>。
+         恢复一个被 suspend 的租户账户（注：原 docstring 文案误写 'suspend'）。"
   (with-opr-session-check
     (let ((params nil)
 	  (tenant-id (hunchentoot:parameter "tenant-id")))
@@ -117,12 +184,14 @@
 
 
 (defun com-hhub-transaction-system-dashboard ()
-
+  ;; URL：/hhub/hhubdiagnostics（推测）。占位：系统诊断/仪表盘控制器，目前空实现。
 )
 
 
 (defun com-hhub-transaction-sadmin-profile ()
- (with-opr-session-check 
+  "URL：/hhub/hhubsadminprofile。SADMIN 个人资料页：list-group 入口
+   GST HSN 维护 / 项目符号查找 / 重置密码（占位）/ Feature Wishlist / Bug 反馈。"
+ (with-opr-session-check
     (with-standard-admin-page (:title "welcome to Nine Stores")
        (:h3 "Welcome " (cl-who:str (format nil "~a" (get-login-user-name))))
        (:hr)
@@ -134,13 +203,16 @@
 	    (:a :class "list-group-item" :href *HHUBBUGSURL* "Report Issues")))))
 
 (defun dod-controller-run-daily-orders-batch ()
- :documentation "This controller function is responsible to run the daily orders batch against all the subscriptions customers have made for a particular group/apartment/tenant" 
+ :documentation "This controller function is responsible to run the daily orders batch against all the subscriptions customers have made for a particular group/apartment/tenant.
+   中文：URL：/hhub/rundailyordersbatch。手动触发 daily-orders 批处理（前 7 天 lookback），返回 JSON。"
   (let ((batchresult (run-daily-orders-batch 7)))
     (json:encode-json-to-string batchresult)))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-admin-navigation-bar ()
-    :documentation "This macro returns the html text for generating a navigation bar using bootstrap."
+    :documentation "This macro returns the html text for generating a navigation bar using bootstrap.
+   中文：超管后台顶部 Bootstrap 导航栏宏 —— 左侧 Home / IAM Security，
+         右侧 My Profile / Logout。被 with-standard-admin-page 等模板使用。"
     `(cl-who:with-html-output (*standard-output* nil)
        (:div :class "navbar navbar-default navbar-inverse navbar-static-top"
 	     (:div :class "container-fluid"
@@ -161,8 +233,9 @@
 			      (:li :align "center" (:a :href "dodlogout"  (:i :class "fa-solid fa-arrow-right-from-bracket"))))))))))
   
   
-(defun dod-controller-dbreset-page () 
-  :documentation "No longer used now" 
+(defun dod-controller-dbreset-page ()
+  :documentation "No longer used now.
+   中文：URL：/hhub/dbreset.html（推测）。已弃用 —— 旧版 'restart 站点' 表单。"
   (with-standard-admin-page (:title "Restart Higirisehub.com")
     (:div :class "row"
 	  (:div :class "col-sm-12 col-md-12 col-lg-12"
@@ -176,7 +249,8 @@
 
 
 (defun dod-controller-dbreset-action ()
-  :documentation "No longer used now" 
+  :documentation "No longer used now.
+   中文：URL：/hhub/dbresetaction（已弃用）。校验 password 与 *sitepass* 后 stop-das + start-das 重启 DB 连接。"
   (let ((pass (hunchentoot:parameter "password")))
     (if (equal (encrypt  pass "ninestores.in") *sitepass*)
        (progn  (stop-das) 
@@ -191,6 +265,8 @@
 
 
 (defun company-search-html ()
+  "渲染 SADMIN 主页顶部公司 livesearch 输入框，AJAX 提交到 dodsyssearchtenantaction
+   并替换 #accountlivesearchresult。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "row"
 	  (:div :id "custom-search-input"
@@ -199,6 +275,10 @@
 			(submitsearchform1event-js "#idaccountlivesearch" "#accountlivesearchresult")))))))
 
 (defun com-hhub-transaction-create-company-dialog (&optional id)
+  "Add/Edit Company 模态对话框 fragment（创建租户公司）。
+   传 id 表示编辑现有公司，预填字段；不传则空表单。
+   字段：cmpname / cmpaddress / city / state / country（默认 IND）/ zipcode / website /
+        cmp-type / subscription-plan。POST 到 /hhub/createcompanyaction。"
   (let* ((company (if id (select-company-by-id id)))
 	 (cmpname (if company (slot-value company 'name)))
 	 (cmpaddress (if company(slot-value company 'address)))
@@ -242,6 +322,7 @@
 			  (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Submit"))))))))
 
 (defun company-subscription-plan-dropdown (name selectedkey)
+  "渲染订阅计划下拉框（TRIAL / BASIC / PROFESSIONAL）。selectedkey 命中预选。"
   (let ((subsplan-ht (make-hash-table)))
     (setf (gethash "TRIAL" subsplan-ht) "TRIAL")
     (setf (gethash "BASIC" subsplan-ht) "BASIC")
@@ -250,7 +331,10 @@
     
     
 
-(defun company-type-dropdown (name selectedkey) 
+(defun company-type-dropdown (name selectedkey)
+  "公司业态下拉框（DEFAULT / GROCERY / APPAREL / MOBILE / FASHION JEWELLERY /
+   HYPERMARKET / COMPUTER HARDWARE / SPORTS / FURNITURE / COMMUNITY / STATIONARY /
+   PHOTO SHOP / FARMERS MARKET）。"
   (let ((cmptype-ht (make-hash-table)))
     (setf (gethash "DEFAULT" cmptype-ht) "DEFAULT")
     (setf (gethash "GROCERY" cmptype-ht) "GROCERY") 
@@ -271,6 +355,9 @@
 
 
 (defun dod-controller-new-company-request-page ()
+  "URL：/hhub/hhubnewcompanyreqpage?cmp-type=...。
+   游客版 'New Store Request' 表单：店主姓名/电话/邮箱、店铺名/地址/Pincode（联动 city/state）、
+   网站、TnC 勾选、ReCAPTCHA。提交到 hhubnewstorerequeststep2。"
   (let ((cmp-type (hunchentoot:parameter "cmp-type")))
     ;; Since we came to the new company request page, we will create new session here
     (with-no-navbar-page-v2  "New Store Request"  
@@ -353,6 +440,8 @@
 
 
 (defun hhub-controller-new-community-store-request-page ()
+  "URL：/hhub/hhubnewcommstorerequest?cmp-type=...。
+   类似 dod-controller-new-company-request-page，但用于 'COMMUNITY' 业态（无店铺名/地址等字段）。"
   (let ((cmp-type (hunchentoot:parameter "cmp-type")))
     ;; Since we came to the new company request page, we will create new session here
     (with-no-navbar-page  "New Store Request"  
@@ -421,6 +510,8 @@
 
 
 (defun com-hhub-transaction-request-new-company (type)
+  "新公司请求表单 fragment（type 由调用方传入，cmptype hidden 字段）。
+   POST 到 hhubnewcompreqemailaction（推测：发邮件给 SADMIN 进行人工审核）。"
   (cl-who:with-html-output (*standard-output* nil)
       (:div :class "row" 
 	    (:div :class "col-xs-12 col-sm-12 col-md-12 col-lg-12"
@@ -458,17 +549,21 @@
     
     
 (defun dod-controller-company-search-for-sys-action ()
+  "URL：/hhub/dodsyssearchtenantaction。SADMIN 主页 livesearch 后端：按名称模糊查公司，渲染 tile 网格。"
   (let*  ((qrystr (hunchentoot:parameter "accountlivesearch"))
 	  (company-list (if (not (equal "" qrystr)) (select-companies-by-name qrystr))))
     (display-as-tiles company-list 'company-card "tenant-box")))
 
-(defun com-hhub-transaction-refresh-iam-settings () 
-  (with-opr-session-check 
-      (progn 
+(defun com-hhub-transaction-refresh-iam-settings ()
+  "URL：/hhub/refreshiamsettings。SADMIN 触发 refreshiamsettings —— 重载 ABAC 缓存（policies/transactions/attributes/objects/subjects），再跳回 /hhub/dasabacsecurity。"
+  (with-opr-session-check
+      (progn
 	(refreshiamsettings)
 	(hunchentoot:redirect "/hhub/dasabacsecurity"))))
 
 (defun dod-controller-abac-security ()
+  "URL：/hhub/dasabacsecurity。SADMIN ABAC 主页 —— 顶部 IAM 子模块导航 +
+   策略列表表格（含 Add Policy 按钮 + 模态框）。"
   (let ((policies (hhub-get-cached-auth-policies)))
     (with-opr-session-check 
       (with-standard-admin-page "Welcome to Nine Stores"
@@ -483,11 +578,13 @@
 
 
 
-(defun com-hhub-transaction-sadmin-home () 
+(defun com-hhub-transaction-sadmin-home ()
+  "URL：/hhub/sadminhome。SADMIN 主页（公司列表 + 添加按钮）。"
   (with-opr-session-check
     (with-mvc-ui-page "Welcome Super Administrator" #'create-model-for-sadminhome #'create-widgets-for-sadminhome :role :superadmin)))
 
 (defun create-model-for-sadminhome ()
+  "model：从 IAM 缓存 hhub-get-cached-companies 取所有公司列表。"
   (let ((companies (hhub-get-cached-companies))
 	(params nil))
     (setf params (acons "username" (get-login-username) params))
@@ -497,6 +594,7 @@
 	(values companies))))))
 
 (defun create-widgets-for-sadminhome (modelfunc)
+  "view：欢迎语 + livesearch 输入框 + 'Add New Group' 按钮 + 公司 tile 网格 + 编辑模态框。"
   (multiple-value-bind (companies) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)   
@@ -518,6 +616,8 @@
 
 
 (defun IAM-security-page-header ()
+  "ABAC 子模块统一顶部导航条：Policies / Attributes / Business Objects / Personas /
+   Transactions + 黄色提示（IAM 缓存需要 refresh 才生效）+ 刷新按钮。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "row"
 	  (:div :class "col-sm-12"
@@ -537,11 +637,14 @@
 		(:a :class "btn btn-primary btn-xs" :role "button" :href "/hhub/refreshiamsettings" (:i :class "fa-solid fa-rotate-right"))))
     (:div :class "row" )))
 
+;; 把 *logged-in-users* 初始化为 equal-hash-table（之前 defvar 给的初值是 nil，这里覆盖）。
 (setq *logged-in-users* (make-hash-table :test 'equal))
 
 
-(defun dod-controller-list-busobjs () 
-:documentation "List all the business objects"
+(defun dod-controller-list-busobjs ()
+:documentation "List all the business objects.
+   中文：URL：/hhub/listbusobjects。列出系统全部 dod-bus-object（资源类型）。
+         注释提示了如何从 REPL (create-bus-object) 添加新条目。"
 (with-opr-session-check 
   (let ((busobjs (hhub-get-cached-bus-objects)))
     (with-standard-admin-page "Business Objects ..."
@@ -554,8 +657,10 @@
 
 
 
-(defun dod-controller-list-abac-subjects () 
-:documentation "List all the business objects"
+(defun dod-controller-list-abac-subjects ()
+:documentation "List all the business objects.
+   中文：URL：/hhub/listabacsubjects。列出当前公司下的 dod-abac-subject（业务主体类型）。
+         备注：原英文 docstring 写的是 'business objects'，与实际显示 'Business Personas' 不符（推测：复制粘贴遗留）。"
 (with-opr-session-check 
   (let ((abacsubjects (select-abac-subject-by-company (get-login-company))))
     (with-standard-admin-page "Business Personas ..."
@@ -569,7 +674,9 @@
 
 
 (defun dod-controller-list-bustrans ()
-:documentation "List all the business transactions" 
+:documentation "List all the business transactions.
+   中文：URL：/hhub/listbustrans。列出系统全部 dod-bus-transaction（URI ↔ 函数 ↔ 策略 绑定）。
+         附 'New Transaction' 按钮 + 模态框（new-transaction-html）。"
 (with-opr-session-check 
   (let ((bustrans (hhub-get-cached-transactions)))
     (with-standard-admin-page "Business Transactions..."
@@ -585,7 +692,9 @@
       (modal-dialog "addtransaction-modal" "Add/Edit Transaction" (new-transaction-html))))))
 
 (defun dod-controller-list-attrs ()
-:documentation "This function lists the attributes used in policy making"
+:documentation "This function lists the attributes used in policy making.
+   中文：URL：/hhub/listattributes。列出 PIP 缓存的 ABAC 属性条目（name/desc/func/type）+
+         新增按钮 + 模态框 com-hhub-transaction-create-attribute-dialog。"
  (with-opr-session-check 
    (let ((lstattributes (hhub-get-cached-abac-attributes)))
      (with-standard-admin-page  "attributes ..."
@@ -600,7 +709,11 @@
        (modal-dialog "addattribute-modal" "Add/Edit Attribute" (com-hhub-transaction-create-attribute-dialog))))))
 
 (defun dod-controller-loginpage ()
-  (handler-case 
+  "URL：/hhub/opr-login.html。SADMIN/OPR 登录页。
+   预先 'select 1' 探测 DB 连接：
+     - 已登录 → 跳 /hhub/sadminhome；
+     - 未登录 → 渲染登录表单（POST sadminlogin）。"
+  (handler-case
       (progn  (if (equal (caar (clsql:query "select 1" :flatp nil :field-names nil :database *dod-db-instance*)) 1) T)	      
 	      (if (is-dod-session-valid?)
 		  (hunchentoot:redirect "/hhub/sadminhome")
@@ -628,10 +741,13 @@
 	    (hunchentoot:redirect "/hhub/opr-login.html"))))))
 
 (defun com-hhub-transaction-sadmin-login ()
+  "URL：/hhub/sadminlogin。SADMIN 登录提交动作，返回跳转 URL。"
   (let ((uri (with-mvc-redirect-ui #'create-model-for-sadminlogin #'create-widgets-for-genericredirect)))
     (format nil "~A" uri)))
 
 (defun create-model-for-sadminlogin ()
+  "登录 model：取 username/password/company 三参数 → dod-login 校验。
+   成功改 redirectlocation 为 /hhub/sadminhome；失败保持登录页。"
  (let  ((uname (hunchentoot:parameter "username"))
 	(passwd (hunchentoot:parameter "password"))
 	(cname (hunchentoot:parameter "company"))
@@ -653,6 +769,8 @@
 
 ;;;;;;;;;;;;;;com-hhub-transaction-cad-logout;;;;;;;;;;;;;;;
 (defun create-model-for-sadminlogout ()
+  "SADMIN 登出 model：dod-logout 清登录态、remove-session、删除 BusinessSession，
+   重定向 /hhub/opr-login.html。"
   (let ((username (get-login-username))
 	(redirectlocation "/hhub/opr-login.html"))
     (progn
@@ -663,16 +781,21 @@
 	redirectlocation)))))
 
 (defun dod-controller-logout ()
+  "URL：/hhub/dodlogout。SADMIN 登出主入口（model 后做 302 跳转）。"
   (let ((uri (with-mvc-redirect-ui #'create-model-for-sadminlogout #'create-widgets-for-genericredirect)))
     (hunchentoot:redirect (format nil "~A" uri))))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;  
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 (defun is-dod-session-valid? ()
+  "判定 hunchentoot 当前是否有 session。返回 T/NIL。"
   (if hunchentoot:*session* T NIL))
 
 
 (defun dod-login (&key company-name username password)
+  "SADMIN/通用登录核心：按 username 查 dod-users（仅未删除）；同时校验 company 名匹配 + 密码匹配 +
+   当前 session 未登录三条件。通过则 start-session、设置 8 小时超时、调 set-user-session-params 注入会话。
+   返回 T 表示登录成功；其他情况 nil。"
   (let* ((login-user (car (clsql:select 'dod-users :where [and
 					[= [slot-value 'dod-users 'username] username]
 					[= [:deleted-state] "N"]]
@@ -694,32 +817,44 @@
 	T))))
   
 (defun get-tenant-id (company-name)
+  "按公司名查 row-id（仅取第一条）。"
   ( car ( clsql:select [row-id] :from [dod-company] :where [= [slot-value 'dod-company 'name] company-name]
 		       :flatp t)))
 
 (defun get-tenant-name (company-id)
+  "按公司主键查 name。"
   ( car ( clsql:select [name] :from [dod-company] :where [= [slot-value 'dod-company 'row-id] company-id]
 		       :flatp t)))
-  
+
 
 (defun get-login-user-object (username)
+  "从 *logged-in-users* 哈希表读取已登录的 user 对象。"
   (gethash username *logged-in-users*))
 
 
 (defun is-user-already-login? (username)
+  "判断 username 是否已在登录态。"
 (if (equal (gethash username *logged-in-users*) NIL ) NIL T))
 
 
 (defun add-login-user(username object)
+  "把 user 对象注册到 *logged-in-users*；若该 username 已登录则不覆盖。"
   (unless (is-user-already-login? username)
 	   (setf (gethash username *logged-in-users*) object)))
 
 
 (defun dod-logout (username)
+  "登出：从 *logged-in-users* 中移除 username 对应的项。"
   (remhash username *logged-in-users*))
 
 
 (defun dod-controller-new-store-request-step2 ()
+  "URL：/hhub/hhubnewstorerequeststep2。
+   游客提交 'New Store Request' 第一步表单后的处理：
+     1) 调 Google ReCAPTCHA v2 校验 captcha；
+     2) 构造内存 dod-company（不写库），把店主信息+公司对象写入 hunchentoot session；
+     3) 调 generateotp&redirect 给 phone 发 OTP；OTP 验证通过后跳到 'hhubnewcompreqemailaction'。
+   备注：cmpzipcode 用 parse-integer 解析，空字符串会抛错（推测：调用方表单已校验非空）。"
 (let*  ((custname (hunchentoot:parameter "custname"))
 	(email (hunchentoot:parameter "email"))
 	(phone (hunchentoot:parameter "phone"))
@@ -771,6 +906,9 @@
 
 
 (defun dod-controller-new-company-request-email ()
+  "URL：/hhub/hhubnewcompreqemailaction。
+   OTP 校验通过后被回调：从 session 取出 step2 缓存的公司对象与店主信息，
+   send-new-company-registration-email 通知 SADMIN 走人工审核，清掉 session，跳转到 hhubnewcompreqemailsent 提示页。"
   (let*  ((company (hunchentoot:session-value :newstorerequest-company))
 	  (custname (hunchentoot:session-value :newstorerequest-custname))
 	  (phone (hunchentoot:session-value :newstorerequest-phone))
@@ -784,6 +922,11 @@
 	  
 
 (defun 	com-hhub-transaction-create-company ()
+  "URL：/hhub/createcompanyaction。SADMIN 创建/更新公司：
+     - 若传 id 则更新现存公司字段并 update-company；
+     - 否则 new-dod-company 新建（同时会创建 default vendor 与 guest customer）。
+   备注：unless 内 (and (or null zerop) ...) 复合判定为 *任一* 字段非空时才执行 ——
+   行为与多处 add-user/login 相同。完成后跳 /hhub/sadminhome。"
   (with-opr-session-check
     (let ((params nil))
       (setf params (acons "uri" (hunchentoot:request-uri*)  params))
@@ -829,6 +972,23 @@
 
 
 
+;; ============================================================================
+;; 全平台路由表（Hunchentoot dispatch-table）—— 一次性 setq 完成
+;; ----------------------------------------------------------------------------
+;; 每条 (create-regex-dispatcher "^/hhub/<path>" 'controller) 把一个 URL 前缀绑定到
+;; 对应控制器函数。下方按角色分段：
+;;   - SUPERADMIN/OPERATOR
+;;   - COMPADMIN/COMPANYHELPDESK/COMPANYOPERATOR
+;;   - CUSTOMER
+;;   - VENDOR
+;;
+;; 注意：
+;; (1) 由于使用 ^/hhub/<path> 正则匹配，路径相互前缀重合时会发生误匹配。
+;;     文件中后段有红字 WARNING 说明：URI 不能存在公共子串。
+;; (2) 以 'com-hhub-transaction-*' 命名的控制器同时是 ABAC 事务的 trans-func 字段值；
+;;     请求被 PEP 宏 with-hhub-transaction 拦截后会查 dod-bus-transaction 取策略
+;;     并交由 PDP 求值。
+;; ============================================================================
 (setq hunchentoot:*dispatch-table*
     (list
 	;***************** SUPERADMIN/OPERATOR RELATED ********************

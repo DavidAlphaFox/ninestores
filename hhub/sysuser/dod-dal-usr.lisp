@@ -1,6 +1,41 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：sysuser —— 系统用户主体
+;;;; 分层：DAL（数据访问层）
+;;;; 文件：hhub/sysuser/dod-dal-usr.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义 dod-users 这一系统通用用户实体的 CLSQL view-class；
+;;;;       一一映射到 MySQL 表 DOD_USERS。所有内部用户（系统管理员、CAD、
+;;;;       Operator 等）共用此表，区分通过 dod-user-roles 关联到的角色判定。
+;;;;
+;;;; 主要导出：
+;;;;   dod-users   — 用户主体 view-class（含密码 + salt、email、phone、所属公司、上级 manager）
+;;;;
+;;;; 关联：
+;;;;   上游使用方：sysuser/dod-dal-sys.lisp（角色绑定）、sysuser/dod-bl-usr.lisp（CRUD）、
+;;;;               几乎所有模块都通过 created-by / updated-by JOIN 此实体
+;;;;   下游依赖：dod-company（多租户）
+;;;; ============================================================================
+
 (in-package :nstores)
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-users
+;; 表：DOD_USERS
+;; 含义：系统内部用户主体表。
+;; 关键字段：
+;;   row-id           主键
+;;   name             显示名
+;;   username         登录名（用于 login-user）
+;;   password         密码（推测：散列值；存储与 salt 配合）
+;;   salt             密码盐
+;;   email            邮箱
+;;   phone-mobile     手机号
+;;   tenant-id        多租户隔离键 → dod-company.row-id
+;;   parent-id        上级用户 → dod-users.row-id（用作组织汇报关系）
+;;   created-by/updated-by → dod-users.row-id（操作审计）
+;;   deleted-state    'N'/'Y' 软删标志
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-users ()
   ((row-id
     :db-kind :key

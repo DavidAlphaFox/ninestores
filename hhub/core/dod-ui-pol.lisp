@@ -1,7 +1,45 @@
+;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— ABAC 策略本体（com-hhub-policy-*）+ PAP 后台 UI
+;;;; 分层：UI 控制器/视图层（含策略函数 + PAP 后台控制器）
+;;;; 文件：hhub/core/dod-ui-pol.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：本文件包含两类内容：
+;;;;   1) ABAC 策略函数本体 com-hhub-policy-*（约 60+ 个），统一签名
+;;;;      (&optional (params nil))；返回 T 放行 / NIL 默认拒绝 /
+;;;;      (error 'hhub-abac-transaction-error :errstring "...") 显式拒绝。
+;;;;      策略类型涵盖：完全开放 T、角色 RBAC 简化、订阅套餐配额复合 ABAC、
+;;;;      实时业务事实（数据库查询）等。
+;;;;   2) 超管后台的 PAP 控制器（dod-controller-add-transaction-action /
+;;;;      dod-controller-trans-to-policy-link-page / dod-controller-policy-search-action 等），
+;;;;      用 with-opr-session-check 保护，提供策略/属性/事务 CRUD UI。
+;;;;
+;;;; 主要导出（按类别）：
+;;;;   策略：com-hhub-policy-{create,read,readall,update,delete}-warehouse
+;;;;         com-hhub-policy-{customer-address, show-invoice-*, search-invoice-action,
+;;;;         create-invoice-action, search-gst-hsn-codes-action,
+;;;;         vendor-add-product-action, vendor-bulk-products-add,
+;;;;         vendor-approve-action, vendor-reject-action,
+;;;;         account-suspend / account-restore, customer&vendor-create,
+;;;;         vendor-order-setfulfilled, abac-security-page, ...}
+;;;;   PAP UI：dod-controller-* 系列；dod-controller-add-transaction-action、
+;;;;          dod-controller-trans-to-policy-link-page、dod-controller-policy-search-action
+;;;;
+;;;; 设计要点（详见 docs/architecture.md 第 6.4 / 6.6 节）：
+;;;;   - 策略可以反向调用其他策略实现复用（如 reject = approve 取反 + 显式 error）；
+;;;;   - 策略中可以读 PIP（com-hhub-attribute-*）和 DAL（select-* / get-*）做实时判定；
+;;;;   - 策略热更新需要 (refreshiamsettings) 重建 ABAC 缓存；
+;;;;   - PAP 控制器自身受 with-opr-session-check 保护（自我递归：管策略的能力本身也是策略）。
+;;;;
+;;;; 关联：
+;;;;   上游使用方：has-permission（PDP）反射调用本文件全部 com-hhub-policy-*
+;;;;   下游依赖：core/dod-ui-attr.lisp（PIP 属性）、各模块 BL/DAL 函数、
+;;;;             core/dod-bl-pol.lisp（PAP 后端 CRUD）
+;;;; ============================================================================
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;; HERE WE DEFINE ALL THE POLICIES FOR Nine Stores ;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -208,6 +246,10 @@
 
 
 (defun com-hhub-policy-vendor-add-product-action (&optional (params nil))
+  ;; ABAC 复合策略 —— 卖家新增商品时的检查（架构文档示例）。
+  ;; subject: vendor；resource: company；action: mode='add'；
+  ;; 实时事实：当前商品数 vs 套餐 maxproductcount；suspend-flag 决定是否冻结。
+  ;; 越界 / 已冻结 都用显式 error 抛出业务级拒绝原因（被 PDP 捕获）。
   (let* ((company (cdr (assoc "company" params :test 'equal)))
 	 (vendor (cdr (assoc "vendor" params :test 'equal)))
 	 (mode (cdr (assoc "mode" params :test 'equal)))
@@ -285,7 +327,8 @@ T)
 
 
 (defun com-hhub-policy-cad-product-reject-action (&optional ( params nil))
-  :documentation "only a Company Administrator can Reject a product. "
+  :documentation "only a Company Administrator can Reject a product.
+   中文：直接复用 approve 策略 —— 体现架构文档说的"策略可组合复用"。"
  (com-hhub-policy-cad-product-approve-action params))
 
 (defun com-hhub-policy-compadmin-home ( &optional (params nil))

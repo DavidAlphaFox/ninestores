@@ -1,8 +1,44 @@
+;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：products —— 商品 / 类目 通用 UI Widgets
+;;;; 分层：UI（CL-WHO 模板组件库）
+;;;; 文件：hhub/products/dod-ui-prd.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：提供商品域复用的 HTML 渲染组件。被 customer / vendor / cad / order /
+;;;;       shopcart 多个模块的控制器调用 —— 本文件本身基本没有 com-hhub-transaction-*
+;;;;       入口，只是组件库。
+;;;;       内容大致分四类：
+;;;;         (1) 下拉/输入：ui-list-prod-catg-dropdown / ui-list-yes-no-dropdown
+;;;;         (2) 商品卡片：product-card / product-card-with-details-for-customer /
+;;;;             product-card-for-vendor / product-card-for-approval /
+;;;;             product-card-shopcart / product-card-shopcart-readonly /
+;;;;             product-card-for-email
+;;;;         (3) 商品/商家管理模态框：modal.vendor-product-edit-html /
+;;;;             modal.vendor-product-shipping-html / modal.vendor-upload-product-images /
+;;;;             modal.vendor-product-reject-html / modal.vendor-product-accept-html /
+;;;;             modal.vendor-product-pricing / modal.product-remove-from-shopcart
+;;;;             vendor-product-actions-menu（操作菜单聚合）
+;;;;         (4) 列表/网格：ui-list-prod-catg / ui-list-customer-products /
+;;;;             ui-list-cust-products-horizontal / render-products-list /
+;;;;             display-product-cards / prdcatg-card
+;;;;         (5) 价格 widget：create-model-for-prdpricewithdiscount /
+;;;;             create-widgets-for-prdpricewithdiscount / product-price-with-discount-widget
+;;;;         (6) 图片渲染：render-single-product-image / render-multiple-product-images /
+;;;;             render-multiple-product-thumbnails
+;;;;
+;;;; 关联：
+;;;;   上游使用方：customer / vendor / cad / order / shopcart 各模块的 UI 控制器
+;;;;   下游依赖：products/dod-bl-prd.lisp（取数）、order/* 计算函数 calculate-order-item-cost、
+;;;;             core/* 视图工具
+;;;; ============================================================================
+
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 
 (defun ui-list-prod-catg-dropdown (catglist selectedvalue)
+  "渲染 <select name='prodcatg'> 下拉框，遍历 catglist 输出 <option>，
+   selectedvalue 命中的选项加 :selected。"
   (cl-who:with-html-output (*standard-output* nil)
     (cl-who:htm (:select :class "form-control" :name "prodcatg" 
       (loop for catg in catglist
@@ -11,8 +47,9 @@
 		    ;;else
 		    (cl-who:htm  (:option :value  (slot-value catg 'row-id) (cl-who:str (slot-value catg 'catg-name))))))))))
 
-(defun ui-list-yes-no-dropdown (value) 
-  (cl-who:with-html-output (*standard-output* nil) 
+(defun ui-list-yes-no-dropdown (value)
+  "通用 Y/N 下拉：value='N' 时 NO 选中，否则 YES 选中。"
+  (cl-who:with-html-output (*standard-output* nil)
     (:select :class "form-control" :name "yesno"
 	     (if (equal value "N") (cl-who:htm (:option :value "N" "NO" :selected)
 					       (:option :value "Y" "YES"))
@@ -20,6 +57,7 @@
 			     (:option :value "N" "NO"))))))
 	   
 (defun ui-list-prod-catg (catglist)
+  "横向滚动展示一组类目卡片（每个调用 prdcatg-card），下方加 hr 分割。"
   (cl-who:with-html-output (*standard-output* nil)
     (:span (:h5 "Product Categories"))
     (:div :class "prd-catg-container" :style "width: 100%; display:flex; overflow:auto;"
@@ -32,25 +70,31 @@
 
 
 (defun ui-list-customer-products (data lstshopcart)
+  "C 端商品列表外层 div（id=prdlivesearchresult，供 livesearch 异步替换）。"
   (cl-who:with-html-output (*standard-output* nil)
-    (:div :id "prdlivesearchresult" 
+    (:div :id "prdlivesearchresult"
 	  (cl-who:str (render-products-list data lstshopcart)))))
 
 (defun render-products-list (data lstshopcart)
+  "渲染 .all-products 容器内的商品卡片网格。"
   (cl-who:with-html-output (*standard-output* nil)
-    (:div :class "all-products" 
+    (:div :class "all-products"
 	  (display-product-cards data lstshopcart))))
 
-     
+
 
 (defun ui-list-cust-products-horizontal (data lstshopcart)
+  "横向滚动版商品列表（首页 banner 等场景使用）。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :id "idprd-catg-container" :class "prd-catg-container" :style "width: 100%; display:flex; overflow:auto;"
-	  (with-html-div-row :style "padding: 30px 20px; display: flex; align-items:center; justify-content:center; flex-wrap: nowrap;"  
+	  (with-html-div-row :style "padding: 30px 20px; display: flex; align-items:center; justify-content:center; flex-wrap: nowrap;"
 	    (display-product-cards data lstshopcart)))))
 
 
 (defun display-product-cards (data lstshopcart)
+  "遍历 data，对每个商品调 product-card 渲染。
+   若 session 中设置了 :login-active-vendor（仅展示某个商家的商品），过滤掉非该商家的商品。
+   prdincart-p 由 lstshopcart 中是否含此商品决定（用于在卡片上显示已加购图标）。"
   (cl-who:with-html-output (*standard-output* nil)
     (mapcar (lambda (product)
 	      (let* ((vendor-id (slot-value (product-vendor product) 'row-id))
@@ -61,6 +105,8 @@
 		   (:div :class "product-card" (product-card product  (prdinlist-p (slot-value product 'row-id)  lstshopcart))))))) data )))
 
 (defun product-card-shopcart (product-instance odt-instance)
+  "购物车页中的单行商品卡片：图片 / 名称价格 / 数量 / 折扣 / 小计 + 编辑/删除按钮。
+   小计 = prd-qty × calculate-order-item-cost(odt-instance)，币种符号取自公司账户。"
   (let* ((prd-name (slot-value product-instance 'prd-name))
 	 (qty-per-unit (slot-value product-instance 'qty-per-unit))
 	 (prdqty (slot-value odt-instance 'prd-qty))
@@ -96,6 +142,7 @@
 	  (modal-dialog-v2 (format nil "productremoveshopcart-modal~A" prd-id) (cl-who:str (format nil "Remove Product From Shopcart"))  (modal.product-remove-from-shopcart product-instance))))))))
 
 (defun modal.product-remove-from-shopcart (product)
+  "Remove 商品确认模态框：缩略图 + 红色 Remove 按钮 → POST dodcustremshctitem (action=remitem)。"
   (let* ((id (slot-value product 'row-id))
 	(prd-name (slot-value product 'prd-name))
 	(images-str (slot-value product 'prd-image-path))
@@ -109,12 +156,13 @@
   
 
 (defun product-card-for-email (product-instance odt-instance)
+  "邮件订单确认中的单行商品 <tr>：缩略图 + 名称 + 履约商家 + 数量 + 小计。"
   (let* ((prd-name (slot-value product-instance 'prd-name))
 	 (qty-per-unit (slot-value product-instance 'qty-per-unit))
 	 (prdqty (slot-value odt-instance 'prd-qty))
 	 (images-str (slot-value product-instance 'prd-image-path))
 	 (imageslst (safe-read-from-string images-str))
-	 (subtotal (calculate-order-item-cost odt-instance)) 
+	 (subtotal (calculate-order-item-cost odt-instance))
 	 (prd-vendor (product-vendor product-instance)))
     (cl-who:with-html-output (*standard-output* nil)
       (:tr 
@@ -134,6 +182,7 @@
 
 
 (defun product-card-shopcart-readonly (product-instance odt-instance)
+  "只读购物车视图（订单确认页等）：图片 / 名称 / 三档税额行 / 数量 / 应税值。"
   (let* ((prd-name (slot-value product-instance 'prd-name))
 	 (qty-per-unit (slot-value product-instance 'qty-per-unit))
 	 (prdqty (slot-value odt-instance 'prd-qty))
@@ -160,13 +209,19 @@
 
 
 (defun prdcatg-card (prdcatg-instance)
+  "类目卡片：链接 dodproductsbycatg?id=<row-id>，文本为类目名。"
     (let ((catg-name (slot-value prdcatg-instance 'catg-name))
 	  (row-id (slot-value prdcatg-instance 'row-id)))
 	(cl-who:with-html-output (*standard-output* nil)
 	  (:a :href (format nil "dodproductsbycatg?id=~A" row-id) (cl-who:str catg-name)))))
 
 
-(defun modal.vendor-product-edit-html (product mode) 
+(defun modal.vendor-product-edit-html (product mode)
+  "Vendor 添加/编辑商品的模态对话框 fragment。
+   mode='NEW' 隐藏 prd-id；mode='EDIT' 写入 hidden prd-id。
+   表单字段：prd-name / 类目下拉 / hsn-code / sku / upc / qty-per-unit / unit-of-measure /
+            units-in-stock / 是否服务 / 是否可订阅 / description（带字数统计）。
+   POST 到 dodvenaddproductaction。"
   (let* ((description (slot-value product 'description))
 	 (subscribe-flag (slot-value product 'subscribe-flag))
 	 (qty-per-unit (slot-value product 'qty-per-unit))
@@ -231,7 +286,10 @@
 		   (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Save"))))))))
 ;; We need to write all the details of the file upload logic here.
 ;; Need to support upload of 5 files
-(defun modal.vendor-upload-product-images (product) 
+;; 商家批量上传商品图片（最多 5 张）的模态框 ——
+;;   表单 multipart 提交到 vuploadprdimagesaction，前端 JS 校验大小、生成预览缩略图。
+(defun modal.vendor-upload-product-images (product)
+  "商品图片批量上传对话框：file input 支持 multiple，5 个 <img> 占位用于即时预览。"
   (let* ((prd-id (slot-value product 'row-id)))
     (cl-who:with-html-output (*standard-output* nil)
       (with-catch-file-upload-event "fileUploadForm"
@@ -255,6 +313,8 @@
 
 
 (defun modal.vendor-product-shipping-html (product mode)
+  "Vendor 配置商品物流信息（长 / 宽 / 高 cm + 重量 kg）的模态框；
+   POST 到 hhubvendaddprodshipinfoaction。"
   (let* ((prd-id (slot-value product 'row-id))
 	 (prd-name (slot-value product 'prd-name))
 	 (images-str (slot-value product 'prd-image-path))
@@ -289,6 +349,8 @@
 		    
 
 (defun modal.vendor-product-reject-html (prd-id tenant-id)
+  "（CAD 视角）拒绝商家提交的商品：模态框含商品缩略图 + 只读名称 + 拒绝原因 textarea；
+   POST hhubcadprdrejectaction。"
   (let* ((company (select-company-by-id tenant-id))
 	 (product (select-product-by-id prd-id company))
 	 (images-str (slot-value product 'prd-image-path))
@@ -317,6 +379,7 @@
 
 
 (defun modal.vendor-product-accept-html (prd-id tenant-id)
+  "（CAD 视角）批准商家提交的商品：模态框，POST hhubcadprdapproveaction。"
   (let* ((company (select-company-by-id tenant-id))
 	 (product (select-product-by-id prd-id company))
 	 (images-str (slot-value product 'prd-image-path))
@@ -344,6 +407,9 @@
 
 
 (defun modal.vendor-product-pricing (product product-pricing)
+  "Vendor 维护商品价格的模态框。无现存定价时显示 New 模式（提交 dodvenprdpricingaddaction），
+   有现存定价时显示 Edit 模式（提交 dodvenprdpricingupdateaction，附 hidden pricing-id）。
+   字段：price / discount / start-date / end-date。"
   (let* ((prd-id (slot-value product 'row-id))
 	(images-str (slot-value product 'prd-image-path))
 	(imageslst (safe-read-from-string images-str))
@@ -390,6 +456,10 @@
 		
 
 (defun vendor-product-actions-menu (product-instance)
+  "Vendor 商品行的操作菜单（一行图标）：开关上架 / 复制 / 编辑 / SKU 生成 / 上传图片 /
+   分享外链 / 物流 / 折扣 / 删除。多数项是带 modal 的 toggle，删除按钮带 JS 二次确认。
+   shipping-weight-kg=0 时图标变红提示未填物流；product-pricing 为空时 Discount 图标亦变红。
+   服务型商品（prd-type='SERV'）隐藏物流入口。"
   (let* ((prd-id (slot-value product-instance 'row-id))
 	 (active-flag (slot-value product-instance 'active-flag))
 	 (external-url (slot-value product-instance 'external-url))
@@ -456,6 +526,9 @@
 
 
 (defun product-card-for-vendor (product-instance)
+  "Vendor 自家商品列表的单卡片：上方控制行（开关 / 详情链接） + 库存徽章 + 图片 + 价格 widget +
+   名称 + 订阅标志 + 描述。状态戳：库存=0 显示 NO STOCK；active-flag='N' 显示 INACTIVE；
+   approved-flag='N' 显示当前 approval-status。"
   (let* ((prd-name (slot-value product-instance 'prd-name))
 	 (units-in-stock (slot-value product-instance 'units-in-stock))
 	 (description (slot-value product-instance 'description))
@@ -507,6 +580,8 @@
 
 
 (defun product-card-for-approval (product-instance &rest arguments)
+  "CAD/超管审批列表里的单商品卡片：所属公司名 + 图片 + 价格 + 名称 + 订阅徽章 +
+   下方两个按钮（拒绝 / 批准模态框）。仅当 approved-flag='N' 时显示按钮。"
   (declare (ignore arguments))
     (let* ((prd-name (slot-value product-instance 'prd-name))
 	   (current-price (slot-value product-instance 'current-price))
@@ -549,6 +624,9 @@
 
 
 (defun create-model-for-prdpricewithdiscount (product product-pricing)
+  "价格 widget 的 model：判断 product-pricing 是否过期（today 不在 [start,end]）；
+   计算折后价 = current-price - current-price*current-discount/100。
+   返回闭包返回多值：(discountexpired-p 原价 折扣% 币符 qty-per-unit uom 折后价)。"
   (let* ((qty-per-unit (slot-value product 'qty-per-unit))
 	 (unit-of-measure (slot-value product 'unit-of-measure))
 	 (current-price (slot-value product 'current-price))
@@ -564,6 +642,9 @@
       (values discountexpired-p current-price current-discount currsymbol  qty-per-unit unit-of-measure  pricewith-discount)))))
     
 (defun create-widgets-for-prdpricewithdiscount (modelfunc)
+  "价格 widget 的 view：
+     - 折扣未过期：折后价（粗体新价）+ 删除线原价 + N% off；
+     - 折扣已过期：'Price discounts are expired.' + 原价。"
   (multiple-value-bind ( discountexpired-p current-price current-discount currsymbol  qty-per-unit unit-of-measure  pricewith-discount) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output  (*standard-output* nil)
@@ -579,9 +660,15 @@
       (list widget1))))
 
 (defun product-price-with-discount-widget (product product-pricing)
+  "价格 widget 公共入口：把 model + view 包成 with-mvc-ui-component 一并渲染。"
   (with-mvc-ui-component #'create-widgets-for-prdpricewithdiscount #'create-model-for-prdpricewithdiscount product product-pricing))
-    
+
 (defun product-card (product-instance prdincart-p)
+  "C 端商品瓦片：图片 / 价格 widget / 名称（截 20 字）/ 'Subscribe' 按钮（仅订阅型 + 客户类型 STANDARD + 公司订阅功能开启时显示）。
+   购物车状态分支：
+     - 已在购物车 → 显示绿色 'In Cart' 静态按钮；
+     - 在售有库存 → 'Add' 按钮 + 数量编辑模态框；
+     - 库存=0 → 'Out of Stock' 红字。"
   (let* ((prd-name (slot-value product-instance 'prd-name))
          (images-str (slot-value product-instance 'prd-image-path))
          (imageslst (safe-read-from-string images-str))
@@ -653,6 +740,9 @@
                       "Out of Stock"))))))))
   
 (defun product-card-with-details-for-customer (product-instance customer  prdincart-p)
+  "商品详情大卡（C 端商品详情页）：多图轮播 + 名称 + 单位 + 商家信息（链接到店铺）+ 描述 +
+   订阅按钮 + 加购/已加购 / 缺货 等状态分支。
+   subscribe 与 product-card 同样要符合 com-hhub-attribute-company-prdsubs-enabled 等条件。"
   (let* ((prd-name (slot-value product-instance 'prd-name))
 	 (qty-per-unit (slot-value product-instance 'qty-per-unit))
 	 (units-in-stock (slot-value product-instance 'units-in-stock))
@@ -716,7 +806,10 @@
 
     
 (defun render-multiple-product-images (prd-name imageslst images-str)
-  :description "Sometimes we store the product image as a list of strings when we want multiple images. other times we store them as a string for backward compatibility reasons"
+  :description "Sometimes we store the product image as a list of strings when we want multiple images. other times we store them as a string for backward compatibility reasons.
+   中文：把商品图片字段渲染为多图轮播 / 网格。
+         imageslst 为列表 → 多图（推测：调用方先 safe-read-from-string 解析）；
+         否则按字符串视为单图，按旧版兼容路径处理。"
   ;; if we have images stored as a list 
   (cl-who:with-html-output (*standard-output* nil) 
     (if (and imageslst  (listp imageslst))
@@ -728,7 +821,9 @@
 	   (:img :src  (format nil "~A" images-str) :class "img-fluid rounded mb-3 product-detail-image" :alt prd-name " "))))))
 
 (defun render-multiple-product-thumbnails (prd-name imageslst images-str)
-  :description "Sometimes we store the product image as a list of strings when we want multiple images. other times we store them as a string for backward compatibility reasons"
+  :description "Sometimes we store the product image as a list of strings when we want multiple images. other times we store them as a string for backward compatibility reasons.
+   中文：渲染商品缩略图条（点击切换主图）。imageslst 列表 → 多缩略图；
+         否则按 images-str 渲染单图。"
   ;; if we have images stored as a list 
   (cl-who:with-html-output (*standard-output* nil) 
     (:div :class "d-flex justify-content-between"
@@ -742,7 +837,9 @@
 		 (:img :src  (format nil "~A" images-str)  :alt prd-name :class "thumbnail rounded" :onclick "changeImage(event, this.src);")))))))
 
 (defun render-single-product-image (prd-name imageslst images-str widthstr heightstr)
-  :description "Sometimes we store the product image as a list of strings when we want multiple images. other times we store them as a string for backward compatibility reasons"
+  :description "Sometimes we store the product image as a list of strings when we want multiple images. other times we store them as a string for backward compatibility reasons.
+   中文：渲染单张固定尺寸图片。优先取 imageslst[0]（多图存储情况），
+         否则按 images-str 渲染。widthstr/heightstr 控制 :width / :height 属性。"
   ;; if we have images stored as a list 
   (cl-who:with-html-output (*standard-output* nil) 
     (if (and imageslst  (listp imageslst))

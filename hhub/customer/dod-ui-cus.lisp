@@ -1,8 +1,80 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：customer 客户（旧风格 dod-，最大 UI 文件）
+;;;; 分层：UI 控制器/视图层
+;;;; 文件：hhub/customer/dod-ui-cus.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：客户端 PWA 自助门店 + 客户后台几乎全部页面与控制器。覆盖：
+;;;;   - 商品/类目轮播、商品详情（游客/正式客户两版）
+;;;;   - 购物车（添加/移除/更新/只读视图）
+;;;;   - 下单流程（地址/运费/支付方式/OTP/创建）
+;;;;   - 配送方式页面（自取 / 免运 / 标准运费）
+;;;;   - 订单查询（列表/日历/详情/取消）
+;;;;   - 钱包卡片与低余额提示
+;;;;   - 客户资料 / 修改密码 / 重置密码 / 忘记密码 / 登录 / OTP 登录 / 注册（含与 vendor 共用注册流程）
+;;;;   - 邮编查询（JSON）、运费查询（JSON）、地址查询（六边形 dispatch-route）
+;;;;
+;;;; 由于体量庞大且大量函数本质是 cl-who 模板片段，下面对**控制器**与**领域操作**逐个加注释，
+;;;; 而把大量纯 widget / 模板片段函数仅做节段标注。
+;;;;
+;;;; 主要导出（节选）：
+;;;;   控制器：dod-controller-cust-index / dod-controller-customer-loginpage /
+;;;;           dod-controller-customer-otploginpage / dod-controller-cust-login /
+;;;;           dod-controller-cust-login-otpstep / dod-controller-cust-login-with-otp /
+;;;;           dod-controller-cust-login-as-guest / dod-controller-customer-logout /
+;;;;           dod-controller-cust-add-to-cart / dod-controller-cust-update-cart /
+;;;;           dod-controller-remove-shopcart-item / dod-controller-cust-show-shopcart /
+;;;;           dod-controller-cust-show-shopcart-readonly /
+;;;;           dod-controller-cust-shipping-methods-page /
+;;;;           dod-controller-customer-payment-methods-page /
+;;;;           dod-controller-cust-add-orderpref-action /
+;;;;           dod-controller-cust-add-order-otpstep /
+;;;;           com-hhub-transaction-create-order / dod-controller-cust-ordersuccess /
+;;;;           dod-controller-my-orders / dod-controller-my-orders1 /
+;;;;           dod-controller-cust-orders-calendar / dod-controller-cust-order-data-json /
+;;;;           hhub-controller-customer-my-orderdetails /
+;;;;           dod-controller-del-order / dod-controller-del-cust-ord-item /
+;;;;           dod-controller-cust-del-orderpref-action /
+;;;;           dod-controller-customer-profile / dod-controller-customer-update-action /
+;;;;           dod-controller-customer-change-pin /
+;;;;           dod-controller-customer-password-reset-page /
+;;;;           dod-controller-customer-password-reset-action /
+;;;;           dod-controller-customer-generate-temp-password /
+;;;;           dod-controller-customer-reset-password-action-link /
+;;;;           dod-controller-cust-register-page /
+;;;;           com-hhub-transaction-customer&vendor-create-otpstep /
+;;;;           com-hhub-transaction-customer&vendor-create /
+;;;;           dod-controller-search-products /
+;;;;           dod-controller-customer-products-by-category /
+;;;;           dod-controller-customer-products-by-vendor /
+;;;;           hhub-controller-pincode-check / hhub-controller-get-shipping-rate /
+;;;;           dod-controller-customer-address /
+;;;;           dod-controller-prd-details-for-guest-customer /
+;;;;           dod-cust-login / dod-cust-login-as-guest / dod-cust-login-with-otp
+;;;;   主要业务函数：
+;;;;           save-temp-guest-customer / maybe-save-guest-customer
+;;;;           calculate-shipping-cost-for-order / determine-default-shipping-option /
+;;;;           determine-shipping-html-page
+;;;;           ordertemplatefill / ordertemplatefillitemrows / display-order-item-row
+;;;;           send-order-email-* / send-order-sms-*
+;;;;           check-all-vendors-wallet-balance / get-shop-cart-total /
+;;;;           get-order-items-total-for-vendor / filter-order-items-by-vendor / 等
+;;;;
+;;;; 关联：
+;;;;   上游使用方：Hunchentoot 派发（/hhub/dodcustindex 等几十条 URL）。
+;;;;   下游依赖：customer/dod-{dal,bl}-cus.lisp、order/dod-{dal,bl}-ord.lisp、
+;;;;             products / shipping / paymentgateway / upi / webpushnotify / email
+;;;;             模板、core 的 PEP 宏、dispatch-route（六边形管线）。
+;;;; ============================================================================
+
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 (defun dod-controller-customer-address  ()
+  "URL: /hhub/customer/address/<phone10>。从 URL 末尾抓 10 位 phone，调
+   dispatch-route :customer/read 走六边形管线（trans-func 名
+   \"com-hhub-transaction-customer-address\"）输出 JSON 地址。
+   被前端 AJAX 在结算页拉取上次保存地址用。"
   (with-cust-session-check
     (let* ((path (hunchentoot:script-name hunchentoot:*request*))
            ;; extract last 10 digits
@@ -16,7 +88,13 @@
       (setf (hunchentoot:return-code*) 200)
       jsondata)))
     
+;; ============================================================================
+;; 节段 1：商品 / 类目轮播 + 工具
+;; ============================================================================
+
 (defun display-products-carousel (numitems products)
+  "渲染商品图片轮播：从 products 中**随机**抽 numitems 个出来作幻灯片。
+   每张点击跳到 /hhub/prddetailsforcust?id=<prd-id>。返回：纯 HTML 片段（写入 stdout）。"
  (let ((prdcount (length products)))
   (cl-who:with-html-output (*standard-output* nil)      
     (:section :class "carousel-container" :id "carousel-container"
@@ -36,6 +114,9 @@
     (:hr))))
 
 (defun display-prdcatg-carousel (numitems categories)
+  "渲染商品类目轮播：从 categories 中随机抽 numitems 个；点击跳转
+   /hhub/dodproductsbycatg?id=<catg-id>。备注：图片 src 暂为空字符串
+   （应是占位，等类目图字段就绪后接入，推测）。"
   (let ((catgcount (length categories)))
     (cl-who:with-html-output (*standard-output* nil)      
       (:section :class "carousel-container" :id "carousel-container"
@@ -57,6 +138,8 @@
 
 
 (defun save-temp-guest-customer (name address city state zip phone email company)
+  "把游客在结算页填写的姓名/地址/电话等暂存到 session :temp-guest-customer。
+   不写库；下单成功后才走 maybe-save-guest-customer 决定是否落库。"
   (let ((temp-customer (make-instance 'DOD-CUST-PROFILE
 				      :row-id (get-login-customer-id))))
     (setf (slot-value temp-customer 'name) name)
@@ -69,7 +152,13 @@
     (setf (slot-value temp-customer 'company) company)
     (setf (hunchentoot:session-value :temp-guest-customer) temp-customer)))
 
+;; ============================================================================
+;; 节段 2：配送方式三种页面 —— 自取 / 免运 / 标准运费
+;; 由 determine-shipping-html-page 根据 vendor 设置 + 购物车金额选用其一。
+;; ============================================================================
+
 (defun render-pickup-only-page (modelfunc)
+  "渲染\"店内自取\"页面：展示 vendor 地址 / 电话 / 商品总价，运费 0 元。"
   (multiple-value-bind (vaddress vcity vzipcode vphone currsymbol shopcart-total)
       (funcall modelfunc)
     (with-html-card
@@ -97,6 +186,7 @@
 
 ;; Assuming the existence of these rendering functions
 (defun render-free-shipping-page (modelfunc)
+  "渲染\"免运费\"页面：当订单金额 ≥ vendor 的 free-ship 阈值时进入。"
   (multiple-value-bind (currsymbol freeshipminorderamt)
       (funcall modelfunc)
     (with-html-card
@@ -114,6 +204,7 @@
                    (:i :class "fa-solid fa-truck-fast fa-2x text-success")))))))
 
 (defun render-standard-shipping-page (modelfunc)
+  "渲染\"标准运费\"页面：展示按邮编/区域 / 模板表 / 第三方等多种 shipping option。"
   (multiple-value-bind (freeshipenabled freeshipminorderamt shipping-cost currsymbol shopcart-total)
       (funcall modelfunc)
     (with-html-card
@@ -148,6 +239,7 @@
 
 ;; This is a pure function.
 (defun display-cust-shipping-costs-widget (shopcart-total shipping-options storepickupenabled vendor freeshipenabled company)
+  "组合 widget：按 vendor 启用的能力（pickup / 免运费 / 多种运费方式）渲染选项。"
   :description "The display-cust-shipping-costs-widget function generates an HTML widget for displaying shipping costs, allowing users to choose between shipping or store pickup. It dynamically updates cost information and visibility based on user interactions"
   (let* ((vaddress (address vendor))
          (vcity (city vendor))
@@ -198,12 +290,19 @@
 }"))))
 
 
+;; ============================================================================
+;; 节段 3：支付方式页面（钱包 / COD / UPI / 网关）
+;; ============================================================================
+
 (defun dod-controller-customer-payment-methods-page ()
+  "URL: 支付方式选择页（结算流程的一步）。要求客户登录，按 vendor 设置展示
+   钱包 / COD / UPI / 在线支付网关四种 widget。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer Payment Methods" #'create-model-for-customerpaymentmethodspage #'create-widgets-for-customerpaymentmethodspage :role :customer)))
 
 
 (defun create-widgets-for-customerpaymentmethodspage (modelfunc)
+  "支付方式页面 widgets。从 modelfunc 拿到 vendor 设置后，组合显示对应 widget 列表。"
   (multiple-value-bind
         (cust-type lstcount vendor-list customer custcomp singlevendor-p
          vpayapikey-p vupiid-p phone codenabled upienabled payprovidersenabled
@@ -267,6 +366,8 @@
 
 
 (defun create-model-for-customerpaymentmethodspage ()
+  "支付方式页模型：综合查询 vendor 的 payment-methods 设置 / API key 状态 /
+   钱包余额 / 是否唯一 vendor 等，用 acons 装进 alist。"
   (let* ((lstshopcart (hunchentoot:session-value :login-shopping-cart))
 	 (lstcount (length lstshopcart))
 	 (orderparams-ht (get-cust-order-params))
@@ -540,7 +641,14 @@ Only shows sections based on availability flags and customer type."
 	(buttontext "Strong Text"))
     (values id buttontext itembodyhtml)))
 
+;; ============================================================================
+;; 节段 4：邮编 / 运费 JSON 接口（结算页 AJAX）
+;; ============================================================================
+
 (defun hhub-controller-get-shipping-rate ()
+  "URL: 运费率 AJAX 接口。?pincode=xxxxxx 触发 Address-Adapter 流程，返回 JSON。
+   备注：实现与 hhub-controller-pincode-check 几乎相同（推测：原本想区分两个端点，
+   但实际共用了 Address-Adapter；运费场景可能尚未走专属 service）。"
   (let* ((pincode (hunchentoot:parameter "pincode"))
 	   (params nil)
 	   (addressadapter (make-instance 'Address-Adapter))
@@ -552,6 +660,9 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun hhub-controller-pincode-check ()
+  "URL: 邮编校验 AJAX 接口。?pincode=xxxxxx，调 Address-Adapter 走 RequestPincode →
+   AddressService → ResponseAddress → AddressViewModel → JSONView。
+   返回：JSON {success:1|0, result:[{locality,city,state}]}。"
   (let* ((pincode (parse-integer (hunchentoot:parameter "pincode")))
 	 (params nil)
 	 (addressadapter (make-instance 'Address-Adapter))
@@ -562,6 +673,8 @@ Only shows sections based on availability flags and customer type."
   
   
 (defmethod Render ((view JSONView) (viewmodel AddressViewModel))
+  "JSONView 渲染 AddressViewModel：locality/city/state 都齐全 → success=1；
+   否则 success=0。结果存入 view.jsondata 并作为字符串返回。"
   (let* ((templist '())
 	 (appendlist '())
 	 (mylist '())
@@ -619,7 +732,10 @@ Only shows sections based on availability flags and customer type."
 		       (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Submit"))))))))
 
 (defun dod-controller-customer-update-action ()
-  (with-cust-session-check 
+  "URL: /hhub/hhubcustupdateaction —— 客户在 \"Customer Contact Info\" 弹窗里
+   提交表单后命中。直接把表单字段写到当前登录 customer 上并写库，再重定向回
+   /hhub/dodcustprofile。要求客户已登录。"
+  (with-cust-session-check
     (let* ((customer (get-login-customer))
 	   (name (hunchentoot:parameter "name"))
 	   (address (hunchentoot:parameter "address"))
@@ -657,7 +773,12 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-change-pin ()
-  (with-cust-session-check 
+  "URL: /hhub/hhubcustomerchangepin —— 修改密码：先用旧密码 + 当前 salt 验证身份，
+   通过后用新 salt 重新加密 newpassword（确保两次新密码一致）写库。
+   失败 → dod-response-passwords-do-not-match-error 返回错误片段；
+   成功 → 重定向 /hhub/dodcustprofile。
+   备注：源码上方注释提示已切换到 OTP 登录后该入口未在 UI 暴露。"
+  (with-cust-session-check
     (let* ((customer (get-login-customer))
 	   (password (hunchentoot:parameter "password"))
 	   (newpassword (hunchentoot:parameter "newpassword"))
@@ -680,6 +801,8 @@ Only shows sections based on availability flags and customer type."
 ;;;;;;;;;;;;;;;; CUSTOMER PROFILE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun customer-profile-widget (customername customer-instance)
+  "客户个人中心 widget：顶部欢迎语 + 列表入口（联系信息、功能愿望单、报问题）。
+   原修改密码入口已注释（OTP 登录后不再走密码）。"
   (make-ui-widget
    (lambda ()
      (cl-who:with-html-output (*standard-output* nil)
@@ -696,56 +819,68 @@ Only shows sections based on availability flags and customer type."
 	     (:a :class "list-group-item" :href *HHUBBUGSURL* "Report Issues"))))))
 
 (defun customer-profile-component ()
+  "组装客户个人中心组件：从 model thunk 取 customername + customer-instance，输出
+   单 widget 列表。"
   (make-ui-component :customer-profile-component
 		     (lambda (mf)
 		       (multiple-value-bind (customername customer-instance) (funcall mf)
 			 (list (customer-profile-widget customername customer-instance))))))
 
 (defun customer-profile-page ()
+  "客户个人中心 ui-page（角色 :customer）。"
   (make-ui-page :customer
 		:customer-profile-page
 		(customer-profile-component)))
 
 (defun create-widgets-for-displaycustomerproile (modelfunc)
+  "with-mvc-ui-page 的 widgets 回调：渲染 customer-profile-page。"
   (render-ui-page (customer-profile-page) modelfunc))
-    
+
 (defun create-model-for-displaycustomerproile ()
+  "客户个人中心模型 thunk：返回 (customer-name, customer-instance)。"
   (function (lambda ()
     (values (get-login-cust-name)
 	    (get-login-customer)))))
 
 (defun dod-controller-customer-profile ()
+  "URL: /hhub/dodcustprofile —— 客户个人中心控制器（要求登录）。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer Profile" #'create-model-for-displaycustomerproile #'create-widgets-for-displaycustomerproile :role :customer)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; ============================================================================
+;; 节段 5：客户登录态 session 访问器 + 登出
+;; ============================================================================
+
 (defun get-login-customer ()
-    :documentation "get the login session for customer"
+    :documentation "Original English. 中文：取 session 中存的当前登录客户实例。"
     (hunchentoot:session-value :login-customer ))
 
 (defun get-login-customer-id ()
-  :documentation "get login customer id"
+  :documentation "Original English. 中文：取当前登录客户的 row-id（数值）。"
   (hunchentoot:session-value :login-customer-id))
 
 
 (defun get-login-cust-company ()
-    :documentation "get the login customer company."
+    :documentation "Original English. 中文：取当前客户所属公司（dod-company 实例）。"
     (hunchentoot:session-value :login-customer-company))
 
 (defun get-login-cust-name ()
-    :documentation "gets the name of the currently logged in customer"
+    :documentation "Original English. 中文：取当前客户的姓名字符串。"
     (hunchentoot:session-value :login-customer-name))
 
 (defun dod-controller-customer-logout ()
-  :documentation "customer logout."
+  :documentation "Original English. 中文：客户登出控制器。销毁 hunchentoot session；
+   若客户所属公司有 website 则跳到该 website，否则回到 *siteurl*。"
   (let ((company-website (get-login-customer-company-website)))
     (when hunchentoot:*session* (hunchentoot:remove-session hunchentoot:*session*))
-    (if (> (length company-website) 0) (hunchentoot:redirect (format nil "http://~A" company-website)) 
+    (if (> (length company-website) 0) (hunchentoot:redirect (format nil "http://~A" company-website))
 	;; else
 	(hunchentoot:redirect *siteurl*))))
 
 (defun dod-controller-guest-customer-logout ()
+  "游客登出控制器。销毁 session，跳回 /hhub/customer-login.html。"
   (when hunchentoot:*session* (hunchentoot:remove-session hunchentoot:*session*))
   (hunchentoot:redirect "/hhub/customer-login.html"))
 
@@ -753,14 +888,21 @@ Only shows sections based on availability flags and customer type."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; das-cust-page-with-tiles;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun das-cust-page-with-tiles (displayfunc pagetitle &rest args)
-  :documentation "this is a standard higher order function which takes the display function as argument and displays the information"
+  :documentation "Original English. 中文：通用高阶包装器：要求客户登录，把 displayfunc 应用到
+   args 上、外面套上 with-standard-customer-page (:title pagetitle) 渲染标准客户页面壳。"
   (with-cust-session-check
-    (with-standard-customer-page (:title pagetitle) 
+    (with-standard-customer-page (:title pagetitle)
       (apply displayfunc args))))
 
 
-;; This is a pure function. 
+;; ============================================================================
+;; 节段 6：钱包卡片 / 行渲染 / 低余额表格
+;; ============================================================================
+
+;; This is a pure function.
 (defun wallet-card (wallet-instance custom-message)
+  "渲染单张钱包卡片（卖家名 + 客户名 + 余额）。低于阈值时切换为 warning 标签。
+   底部带充值表单（POST /dodsearchcustwalletaction）。"
   (let* ((customer (get-customer wallet-instance))
 	(company (get-login-customer-company))
 	(currsymbol (get-currency-html-symbol (get-account-currency company)))
@@ -786,8 +928,10 @@ Only shows sections based on availability flags and customer type."
 
 
 
-;; This is a pure function. 
+;; This is a pure function.
 (defun cust-wallet-as-row (wallet &rest arguments)
+  "渲染钱包列表单行 <td>：vendor 名 / phone / 余额（低额时红色）/ 1000 / 2000 充值按钮。
+   被 nst-ui-cuswall.lisp 中的 display-as-table 调用。"
   (declare (ignore arguments))
   (let* ((vendor (slot-value wallet 'vendor))
 	 (balance (slot-value wallet 'balance))
@@ -809,8 +953,10 @@ Only shows sections based on availability flags and customer type."
       (:td :height "10px"
 	   (:a  :class "btn btn-primary" :role "button"  :href (format nil "/hhub/hhubcustwalletrechargepage?amount=2000.00&wallet-id=~A" wallet-id) "2000")))))
 
-;; This is a pure function. 
+;; This is a pure function.
 (defun list-customer-low-wallet-balance (wallets order-items-totals)
+  "渲染\"我的钱包 + 待支付订单总额\"对照表。某行的 balance 低于其 order-item-total
+   或低于绝对阈值，余额格变红，并展示充值按钮。"
   (let ((header (list "Vendor" "Phone" "Balance" "Order Items Total"  "Recharge")))
     (cl-who:with-html-output (*standard-output* nil)
       (:h3 "My Wallets.")      
@@ -846,7 +992,13 @@ Only shows sections based on availability flags and customer type."
 
 
 
+;; ============================================================================
+;; 节段 7：订阅订单（order preference）操作 + 订单列表 / 详情
+;; ============================================================================
+
 (defun create-model-for-custdeleteordersubscription ()
+  "删除订阅订单的模型：取 ?id=ordpref-id，调 delete-opref 软删；
+   刷新 session 中订阅缓存；返回 thunk 携带重定向 URL /hhub/custsubscriptions。"
   (let ((ordpref-id (parse-integer (hunchentoot:parameter "id")))
 	(cust (hunchentoot:session-value :login-customer))
 	(company (hunchentoot:session-value :login-customer-company))
@@ -859,23 +1011,29 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun create-widgets-for-custdeleteordersubscription (modelfunc)
+  "with-mvc-redirect-ui 的 widgets 回调：返回单 widget 输出 redirectlocation。"
   (multiple-value-bind (redirectlocation) (funcall modelfunc)
     (let ((widget1 (function (lambda () redirectlocation))))
       (list widget1))))
 
 (defun dod-controller-cust-del-orderpref-action ()
-    :documentation "delete order preference"
+    :documentation "Original English. 中文：删除订阅订单（order preference）控制器。
+   要求客户登录；用 with-mvc-redirect-ui 走完 model+widgets 后返回重定向 URL。"
   (with-cust-session-check
     (let ((uri (with-mvc-redirect-ui #'create-model-for-custdeleteordersubscription #'create-widgets-for-custdeleteordersubscription)))
       (format nil "~A" uri))))
 
 (defun create-model-for-custorders ()
+  "客户订单列表模型：从 session 缓存 :login-cusord-cache 取订单列表 + 表头。
+   备注：列表由登录时预热到 session 的缓存提供。"
   (let ((dodorders (hunchentoot:session-value :login-cusord-cache))
 	(header (list  "Order #" "Order Date" "Request Date"  "Actions")))
     (function (lambda ()
       (values dodorders header)))))
     
 (defun create-widgets-for-custorders (modelfunc)
+  "客户订单列表 widgets：顶部三 tab（订单列表 / 日历 / Shop Now），下方
+   ui-list-customer-orders 渲染订单表格；空列表显示 \"No Orders\"。"
   (multiple-value-bind (dodorders header) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -891,11 +1049,13 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-my-orders ()
-    :documentation "a callback function which prints orders for a logged in customer in html format."
+    :documentation "Original English. 中文：URL: /hhub/dodmyorders —— 客户订单列表页。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer Orders" #'create-model-for-custorders #'create-widgets-for-custorders :role :customer)))
 
 (defun dod-controller-cust-order-data-json ()
+  "URL: 客户订单日历页 AJAX 数据接口。把 session 里订单列表转成 calendar.js 期望的
+   JSON 格式（start/end 毫秒、title、url、class=event-success/event-warning）。"
  (with-cust-session-check
   (let ((templist '())
 	(appendlist '())
@@ -932,8 +1092,10 @@ Only shows sections based on availability flags and customer type."
     
 
 (defun dod-controller-cust-orders-calendar ()
+  "URL: /hhub/dodcustorderscal —— 客户订单日历页。挂载 calendar.js，前端通过
+   dod-controller-cust-order-data-json 拉取数据。"
   (with-cust-session-check
-    (with-standard-customer-page-v2  "list dod customer orders"   
+    (with-standard-customer-page-v2  "list dod customer orders"
       (:link :href "/css/calendar.css" :rel "stylesheet")
       (:ul :class "nav nav-pills" 
 	   (:li :class "nav-item" (:a :class "nav-link" :href "dodmyorders" (:span :class "fa-solid fa-list")))
@@ -963,7 +1125,9 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-my-orders1 ()
-    :documentation "a callback function which prints orders for a logged in customer in html format."
+    :documentation "Original English mentions HTML; impl returns JSON.
+   中文：调试/早期版本 —— 仅返回首条订单的 req-date 字符串作为 JSON。
+   推测：留作历史；正式列表走 dod-controller-my-orders。"
     (let (( dodorders (hunchentoot:session-value :login-cusord-cache)))
       (setf (hunchentoot:content-type*) "application/json")
       (json:encode-json-to-string (get-date-string (slot-value (first dodorders) 'req-date)))))
@@ -976,6 +1140,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-del-order()
+  "URL: 删除订单（软删）。?id=<order-id>，调 delete-order 后刷新 session 订单缓存，
+   重定向 /hhub/dodmyorders。"
     (with-cust-session-check
       (let* ((order-id (parse-integer (hunchentoot:parameter "id")))
 	     (cust (hunchentoot:session-value :login-customer))
@@ -986,12 +1152,17 @@ Only shows sections based on availability flags and customer type."
 	(setf (hunchentoot:session-value :login-cusord-cache) (get-orders-for-customer cust))
 	(hunchentoot:redirect "/hhub/dodmyorders"))))
 
-(defun modal.vendor-details (id) 
-  (let ((vendor (select-vendor-by-id id)))  
+(defun modal.vendor-details (id)
+  "工具：根据 vendor id 渲染 vendor 详情卡片 HTML（用于产品/订单页弹出 vendor 信息）。"
+  (let ((vendor (select-vendor-by-id id)))
     (vendor-details-card vendor)))
 
 
 (defun create-model-for-deletecustorditem ()
+  "删除订单中某一行（item）的模型：删除 item → 重新计算订单总额、检查每个 vendor 子单
+   是否归零并随之删除子单 → 总额为 0 时连主单一并删除 → 刷新 session 订单缓存。
+   返回 thunk 携带重定向 URL（订单详情页）。
+   副作用：多张表 UPDATE/DELETE。"
   (let* ((order-id (parse-integer (hunchentoot:parameter "ord")))
 	 (redirectlocation (format nil "/hhub/hhubcustmyorderdetails?id=~a" order-id))
 	 (item-id (parse-integer (hunchentoot:parameter "id")))
@@ -1019,17 +1190,22 @@ Only shows sections based on availability flags and customer type."
       (values redirectlocation)))))
 
 (defun create-widgets-for-deletecustorditem (modelfunc)
+  "with-mvc-redirect-ui 的 widgets 回调：返回单 widget 输出重定向 URL。"
   (multiple-value-bind (redirectlocation) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     redirectlocation))))
       (list widget1))))
 
 (defun dod-controller-del-cust-ord-item ()
+  "URL: 删除订单某行控制器。?ord=<order-id>&id=<item-id>。
+   要求客户登录；走 with-mvc-redirect-ui 完成业务后重定向。"
   (with-cust-session-check
     (let ((uri (with-mvc-redirect-ui #'create-model-for-deletecustorditem #'create-widgets-for-deletecustorditem)))
       (format nil "~A" uri))))
 
 (defun create-model-for-custmyorderdetails ()
+  "订单详情页模型：?id=<order-id>，加载订单 + 行项 + 运费 + 自取标志 + 币种符号，
+   合计 total = order-amt + shipping-cost。"
   (let* ((order-id (parse-integer (hunchentoot:parameter "id")))
 	 (dodorder (get-order-by-id order-id (get-login-cust-company)))
 	 (header (list "Status" "Action" "Name" "Qty"   "Sub-total" ))
@@ -1045,6 +1221,7 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun create-widgets-for-custmyorderdetails (modelfunc)
+  "订单详情 widgets：① 行项表格 ② 小计/运费/总计行 + Store Pickup 印章 ③ 订单头信息。"
   (multiple-value-bind (odtlst header order-amt shipping-cost total dodorder storepickupenabled currsymbol) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -1069,10 +1246,13 @@ Only shows sections based on availability flags and customer type."
       (list widget1 widget2 widget3))))
 
 (defun hhub-controller-customer-my-orderdetails ()
+  "URL: /hhub/hhubcustmyorderdetails?id=<order-id> —— 客户订单详情页。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer My Order Details" #'create-model-for-custmyorderdetails #'create-widgets-for-custmyorderdetails :role :customer)))
 
 (defun create-model-for-searchproducts ()
+  "商品搜索 AJAX 模型：?prdlivesearch=<key>，调 search-products 在客户公司内查；
+   配合 session 购物车做\"已加购\"标记。"
   (let* ((search-clause (hunchentoot:parameter "prdlivesearch"))
 	 (products (if (not (equal "" search-clause)) (search-products search-clause (get-login-cust-company))))
 	 (shoppingcart (hunchentoot:session-value :login-shopping-cart)))
@@ -1080,6 +1260,7 @@ Only shows sections based on availability flags and customer type."
       (values products shoppingcart)))))
 
 (defun create-widgets-for-searchproducts (modelfunc)
+  "商品搜索 widgets：渲染 #prdlivesearchresult 的内容片段（被 AJAX 注入）。"
   (multiple-value-bind (products shoppingcart) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
@@ -1089,15 +1270,21 @@ Only shows sections based on availability flags and customer type."
       (list widget1))))
 		     
 (defun dod-controller-search-products ()
+  "URL: 商品实时搜索 AJAX 控制器（无登录守卫，搜索是公开的）。"
   (let* ((modelfunc (funcall #'create-model-for-searchproducts))
 	 (widgets (funcall #'create-widgets-for-searchproducts modelfunc)))
     (cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
       (loop for widget in widgets do
 	(cl-who:str (funcall widget))))))
 
-(eval-when (:compile-toplevel :load-toplevel :execute) 
+;; ============================================================================
+;; 节段 8：客户端导航栏 / 注册页 / 登录 / OTP / 忘记密码 / 重置密码
+;; ============================================================================
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (defun with-customer-navigation-bar ()
-    :documentation "this macro returns the html text for generating a navigation bar using bootstrap."
+    :documentation "Original English. 中文：渲染客户端 PWA 顶部 Bootstrap 导航条
+   （logo / 购物车 / 用户名 / 退出菜单），返回 HTML 片段。"
     (let ((customer-type (get-login-customer-type)))
        (cl-who:with-html-output (*standard-output* nil)
 	 (:div :class "navbar navbar-inverse  navbar-static-top" :id "hhubcustnavbar"
@@ -1142,9 +1329,10 @@ Only shows sections based on availability flags and customer type."
 			      (:li :align "center" (:a :href "dodcustlogout" (:i :class "fa-solid fa-arrow-right-from-bracket")))))))))))
     
 
-(eval-when (:compile-toplevel :load-toplevel :execute) 
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (defun with-customer-navigation-bar-v2 ()
-    :documentation "this macro returns the html text for generating a navigation bar using bootstrap."
+    :documentation "Original English. 中文：导航栏 v2（Bootstrap 5 + sticky-top + dark）。
+   按订阅套餐 / 公司类型 / 客户类型动态显示 Subscriptions / Orders / Vendors 等入口。"
     (let* ((customer-type (get-login-customer-type))
 	   (company (get-login-customer-company))
 	   (subs-plan (subscription-plan company))
@@ -1199,10 +1387,10 @@ Only shows sections based on availability flags and customer type."
 
 
 
-;;deprecated 
-(eval-when (:compile-toplevel :load-toplevel :execute) 
+;;deprecated
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (defun with-guestuser-navigation-bar ()
-    :documentation "this macro returns the html text for generating a navigation bar using bootstrap."
+    :documentation "Original English. 已弃用：早期游客导航栏。当前路径走 v2 版本。"
     (cl-who:with-html-output (*standard-output* nil)
        (:div :class "navbar navbar-inverse  navbar-static-top"
 	     (:div :class "container-fluid"
@@ -1235,6 +1423,7 @@ Only shows sections based on availability flags and customer type."
   ;;***************** customer login related functions ******************************
 
 (defun dod-controller-cust-apt-no ()
+  "URL: 公寓号填写页（早期注册流程的一步）。?cname=<公司名>。"
  (let ((cname (hunchentoot:parameter "cname")))
    (with-standard-customer-page (:title "welcome to das platform - your demand and supply destination.")
      (:form :class "form-custresister" :role "form" :method "post" :action "dodcustregisteraction"
@@ -1246,10 +1435,14 @@ Only shows sections based on availability flags and customer type."
 			      (:input :class "form-control" :name "tenant-name" :value (format nil "~A" cname) :type "text" :readonly T ))))))))
 
 (defun dod-controller-cust-register-page ()
+  "URL: 客户/卖家注册页控制器。注册时会强制销毁现有 session，避免角色串号。
+   通过 with-mvc-ui-page 串联模型 + widgets。"
   (with-mvc-ui-page "Customer/Vendor SignUp Page" #'create-model-for-custven-signup-page #'create-widgets-for-custven-signup-page :role :customer))
 
 
 (defun create-model-for-custven-signup-page ()
+  "注册页模型：?cname=<公司名> 解析出该租户公司，强制 logout 当前 session，
+   返回 thunk (cmpname, cmpaddress)。"
   (let* ((cname (hunchentoot:parameter "cname"))
 	 (company (select-company-by-name cname))
 	 (cmpname (slot-value company 'name))
@@ -1260,6 +1453,8 @@ Only shows sections based on availability flags and customer type."
       (values cmpname cmpaddress)))))
 
 (defun create-widgets-for-custven-signup-page (modelfunc)
+  "注册页 widgets：5 个分块（公司只读头 / 联系信息 / 卖家税务条件块 / 客户 B2B 条件块 /
+   外层卡片包裹）。卖家与客户子表单初始 d-none，由 reg-type 下拉切换显示（前端 JS 控制）。"
   (multiple-value-bind (cmpname cmpaddress) (funcall modelfunc)
     ;; --- WIDGET 1: Company Header & Read-only Info ---
     (let* ((widget1 (function (lambda ()
@@ -1382,9 +1577,19 @@ Only shows sections based on availability flags and customer type."
 
             
 (defun com-hhub-transaction-customer&vendor-create-otpstep ()
+  "URL: /hhub/custsignup1step2 —— 注册表单提交后的第一步：校验 reCAPTCHA、创建
+   未持久化的 customer/vendor 实例存到 session、给手机发 OTP，再重定向到 OTP 校验页。"
   (with-mvc-redirect-ui #'create-model-for-customer&vendor-create-otpstep #'create-widgets-for-genericredirect))
 
 (defun create-model-for-customer&vendor-create-otpstep ()
+  "OTP 步骤模型：
+   ① 调 Google reCAPTCHA v2 校验；
+   ② 用 reg-type 区分客户/卖家：构造对应的领域对象（不写库），暂存到 session；
+   ③ 客户重复注册检测（duplicate-customerp）—— 重复时跳转 /hhub/duplicate-cust.html；
+   ④ generateotp&redirect 给手机发 OTP 并算出下一步 URL；
+   ⑤ session-max-time 设为 5 分钟限制 OTP 步骤生命期。
+   返回 thunk 携带 redirectlocation。
+   备注：旧密码字段已注释，统一走 OTP 验证。"
   (let* ((reg-type (hunchentoot:parameter "reg-type"))
 	 (captcha-resp (hunchentoot:parameter "g-recaptcha-response"))
 	 (paramname (list "secret" "response" ) ) 
@@ -1475,6 +1680,11 @@ Only shows sections based on availability flags and customer type."
    
 
 (defun com-hhub-transaction-customer&vendor-create ()
+  "URL: 注册流程最后一步（OTP 验证通过后命中）。从 session 取出预先构造的 customer/vendor，
+   走 with-hhub-transaction PEP 鉴权后写库；vendor 还会自动创建 vendor-tenant 关联和
+   默认免运费方式；最后给 email 发欢迎邮件并展示成功页面。
+   副作用：INSERT DOD_CUST_PROFILE / DOD_VEND_PROFILE / DOD_VENDOR_TENANTS 等 + 发邮件。
+   备注：vendor 写库后 sleep 1 秒，应是为了等异步索引/触发器（推测）。"
   (let* ((reg-type (hunchentoot:session-value :reg-type))
 	 (company (hunchentoot:session-value :company))
 	 (customer (hunchentoot:session-value :newcustomercreate))
@@ -1521,18 +1731,23 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-response-passwords-do-not-match-error ()
+  "通用错误响应：密码不匹配，渲染包含 Go Back 按钮的标准客户页面。"
    (with-standard-customer-page (:title "Passwords do not match error.")
     (:h2 "Passwords do not match. Please try again. ")
     	(:a :class "btn btn-primary" :role "button" :onclick "goBack();"  :href "#" (:i :class "fa-solid fa-arrow-left" "Go Back"))))
 (defun dod-response-captcha-error ()
+  "通用错误响应：reCAPTCHA 校验失败，提示稍后重试。"
   (with-standard-customer-page (:title "Captcha response error from Google")
     (:h2 "Captcha response error from Google. Looks like some unusual activity. Please try again later")))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; DUPLICATE CUSTOMER PAGE ;;;;;;;;;;;;;;;;;;;;;;
 (defun dod-controller-duplicate-customer ()
+  "URL: /hhub/duplicate-cust.html 的服务端渲染入口（注册时检测到客户重复时跳到此）。"
   (with-mvc-ui-page "Duplicate Customer"  #'create-model-for-duplicate-customer-page  #'create-widgets-for-duplicate-customer-page :role :customer))
 
 (defun create-model-for-duplicate-customer-page ()
+  "重复客户提示页模型：读取缓存的客户模板 #1，把 %Customer Email% / %Customer Phone%
+   占位符替换为 URL 参数中的值。"
   (let ((dupcustpage (funcall (nst-get-cached-customer-template-func :templatenum 1)))
 	(customeremail (hunchentoot:parameter "email"))
 	(customerphone (hunchentoot:parameter "phone")))
@@ -1542,6 +1757,7 @@ Only shows sections based on availability flags and customer type."
       (values dupcustpage)))))
 
 (defun create-widgets-for-duplicate-customer-page (modelfunc)
+  "重复客户提示页 widgets：直接把替换后的模板字符串原样输出。"
   (multiple-value-bind (dupcustpage) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -1550,11 +1766,15 @@ Only shows sections based on availability flags and customer type."
 ;;;;;;;;;;;;;;;;;;;;;; END DUPLICATE CUSTOMER PAGE ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun dod-controller-company-search-action ()
+  "URL: 公司/店铺名实时搜索 AJAX。?accountlivesearch=<key>。空查询返回空。"
   (let*  ((qrystr (hunchentoot:parameter "accountlivesearch"))
 	  (company-list (if (not (equal "" qrystr)) (select-companies-by-name qrystr))))
     (ui-list-companies company-list)))
 
 (defun dod-controller-company-search-page ()
+  "URL: 公司/店铺搜索页主入口。先做一次 \"select 1\" 探活，保证 DB 连接可用；
+   连接掉线（错误码 2006）时自动 stop-das + start-das 重连。
+   页面给 \"Store Not Found?\" 入口允许新建社区店铺。"
   (handler-case
       (progn  (if (equal (caar (clsql:query "select 1" :flatp nil :field-names nil :database *dod-db-instance*)) 1) T)	      
 	      (with-no-navbar-page-v2 "Welcome to Nine Stores platform" 
@@ -1581,6 +1801,9 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-password-reset-action ()
+  "URL: 密码重置最终提交动作。校验旧密码 + 新密码二次确认 + 重置 token 是否在
+   *HHUBPASSRESETTIMEWINDOW* 分钟内有效；通过则更新 password+salt+activate 并跳到登录页。
+   失败分支：密码不匹配 / token 过期 → 各自的错误页。"
   (let* ((pwdresettoken (hunchentoot:parameter "token"))
 	 (rstpassinst (get-reset-password-instance-by-token pwdresettoken))
 	 (user-type (if rstpassinst (slot-value rstpassinst 'user-type)))
@@ -1608,6 +1831,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-password-reset-page ()
+  "URL: 重置密码表单页（邮件链接打开）。把 token 隐藏字段嵌入表单，提交到
+   /hhub/hhubcustpassreset。"
   (let ((token (hunchentoot:parameter "token")))
     (with-standard-customer-page (:title "Password Reset") 
       (:div :class "row" 
@@ -1632,6 +1857,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-generate-temp-password ()
+  "URL: /hhub/hhubcustgentemppass —— 通过 token 生成临时密码并发邮件。
+   仅在 token 在有效时间窗内可用；过期 → 跳转 token 过期页。"
   (let* ((token (hunchentoot:parameter "token"))
 	 (rstpassinst (get-reset-password-instance-by-token token))
 	 (user-type (if rstpassinst (slot-value rstpassinst 'user-type)))
@@ -1653,6 +1880,10 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-reset-password-action-link ()
+  "URL: /hhub/hhubcustforgotpassactionlink —— 用户在 \"忘记密码\" 表单提交后命中。
+   流程：reCAPTCHA 验证 → email 找客户 → 没找到 → 跳无效邮箱页；
+   找到 → 创建 reset-password token、暂时停用账户（active-flag='N'）、
+   把含 token 的链接发到客户邮箱、跳转\"已发送邮件\"页。"
   (let* ((email (hunchentoot:parameter "email"))
 	 (customer (select-customer-by-email email))
 	 (token (format nil "~A" (uuid:make-v1-uuid )))
@@ -1683,7 +1914,8 @@ Only shows sections based on availability flags and customer type."
 
 
 
-(defun modal.customer-forgot-password() 
+(defun modal.customer-forgot-password()
+  "渲染 \"忘记密码\" 弹窗 HTML：邮箱输入 + reCAPTCHA + 提交按钮。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "row" 
 	  (:div :class "col-xs-12 col-sm-12 col-md-12 col-lg-12"
@@ -1700,7 +1932,11 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-loginpage ()
-  (handler-case 
+  "URL: /hhub/hhubcustloginv2 —— 客户密码登录页。先做 \"select 1\" DB 探活；
+   已登录的客户直接重定向 /hhub/dodcustindex。失败时 stop-das + start-das 重连。
+   备注：占位 placeholder 显示了默认密码 \"Welcome1\"，应是开发演示用，
+   生产部署务必检查（推测：Demo 阶段遗留）。"
+  (handler-case
       (progn  
 	(if (equal (caar (clsql:query "select 1" :flatp nil :field-names nil :database *dod-db-instance*)) 1) T)      
 	(if (is-dod-cust-session-valid?)  
@@ -1732,7 +1968,9 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-otploginpage ()
-  (handler-case 
+  "URL: 客户 OTP 登录页（输入手机号 → 获取 OTP）。已登录用户进入时强制 logout 现 session。
+   DB 失活时 stop-das + start-das 重连后跳回 /hhub/customer-login.html。"
+  (handler-case
       (progn  
 	(if (equal (caar (clsql:query "select 1" :flatp nil :field-names nil :database *dod-db-instance*)) 1) T)      
 	;; if customer is already logged in, then logout and show the login page
@@ -1759,10 +1997,18 @@ Only shows sections based on availability flags and customer type."
 								   (hunchentoot:redirect "/hhub/customer-login.html"))))))
 
 (defun is-dod-cust-session-valid? ()
+  "判断 hunchentoot 是否有当前 session。返回 T/NIL。"
   (if hunchentoot:*session* T NIL))
 
-;; This is pure function. 
+;; ============================================================================
+;; 节段 9：商品加购 / 订阅 / 结算页 widget 集合
+;; （以下大量纯 cl-who 模板片段——只对承担逻辑的关键函数加注释）
+;; ============================================================================
+
+;; This is pure function.
 (defun product-qty-add-html (product product-pricing)
+  "渲染\"添加到购物车\"小卡片：商品图 + 名称 + 价格 + 数量调节器（max 由库存推导）+
+   表单 action /dodcustaddtocart。"
   (let* ((prd-id (slot-value product 'row-id))
 	 (images-str (slot-value product 'prd-image-path))
 	 (imageslst (safe-read-from-string images-str))
@@ -1779,8 +2025,9 @@ Only shows sections based on availability flags and customer type."
       (:div :class "form-group" 
 	    (:input :type "submit"  :class "btn btn-primary" :value "Add To Cart"))))))
 
-;; This is a pure function. 
+;; This is a pure function.
 (defun product-qty-edit-html (product oitem)
+  "渲染购物车内\"修改数量\"小卡片，从 oitem 取已选数量回填，提交到 /dodcustupdatecart。"
   (let* ((prd-id (slot-value product 'row-id))
 	 (prd-image-path (slot-value product 'prd-image-path))
 	 (description (slot-value product 'description))
@@ -1803,7 +2050,8 @@ Only shows sections based on availability flags and customer type."
 		   (:input :type "submit"  :class "btn btn-primary" :value "Update"))))))
 
 
-(defun product-subscribe-html (prd-id) 
+(defun product-subscribe-html (prd-id)
+  "渲染\"订阅商品\"表单（一周 7 天复选框 + 数量），提交到 /dodcustaddopfaction。"
   (let* ((productlist (hunchentoot:session-value :login-prd-cache))
 	 (product (search-item-in-list 'row-id prd-id  productlist))
 	 (prd-image-path (slot-value product 'prd-image-path))
@@ -2000,6 +2248,9 @@ Only shows sections based on availability flags and customer type."
 ;;;;;;;  which could be for both Standard & Guest customers.
 
 (defun standard-cust-information-page (customer)
+  "渲染结算第一步：收集姓名/邮箱/手机/收货地址/账单地址/邮编 + 订单日期/期望送达日。
+   表单提交到 /hhubcustshippingmethodspage 进入运费方式页。
+   被 standard / guest 客户共用（cust-information-page 通过 hash 选择具体函数）。"
   (let* ((cust-name (if customer (slot-value customer 'name)))
          (cust-phone (if customer (slot-value customer 'phone)))
 	 (cust-email (if customer (slot-value customer 'email)))
@@ -2047,6 +2298,7 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-cust-order-shipping-address-page ()
+  "URL: 结算流程第 1 步控制器（地址收集）。要求登录；按 cust-type 选用 STANDARD/GUEST 表单。"
   (let ((cust-type (get-login-customer-type)))
 	(with-cust-session-check
 	  (with-standard-customer-page-v2  "Add Customer Order"
@@ -2057,6 +2309,9 @@ Only shows sections based on availability flags and customer type."
 ;;; This function has been separated from the controller function because it is independently testable.
 
 (defun cust-information-page(cust-type)
+  "通过哈希表分派 STANDARD/GUEST 客户的结算页函数（避免 if 链；同时让函数独立可测）。
+   备注：当前两个分支都指向 standard-cust-information-page —— GUEST 用 session 中暂存
+   的 :temp-guest-customer 实例做参数。"
   ;; We are using a hash table to store the function references to call them later.
   ;; This is a good practice to avoid IF condition.
   (let ((temp-ht (make-hash-table :test 'equal)))
@@ -2069,6 +2324,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun create-model-for-custaddordersubs ()
+  "新增订阅订单的模型：从表单读取 product-id / 数量 / 周一到周日是否启用，
+   调 create-opref 创建订阅；刷新 session 订阅缓存；返回重定向到 /hhub/custsubscriptions。"
   (let ((product-id (hunchentoot:parameter "product-id"))
 	(login-cust (hunchentoot:session-value :login-customer))
 	(login-cust-comp (hunchentoot:session-value :login-customer-company))
@@ -2097,6 +2354,7 @@ Only shows sections based on availability flags and customer type."
 
       
 (defun dod-controller-cust-add-orderpref-action ()
+  "URL: /hhub/dodcustaddopfaction —— 新增订阅订单控制器。"
   (with-cust-session-check
     ;; create the model and return back the url to redirect to.
     (let ((uri (with-mvc-redirect-ui #'create-model-for-custaddordersubs #'create-widgets-for-custaddordersubs)))
@@ -2149,6 +2407,7 @@ Only shows sections based on availability flags and customer type."
 
 ;;;; LOW WALLET BALANCE FOR SHOPCART ;;;;;
 (defun create-model-for-lowwalletbalanceforshopcart ()
+  "购物车余额不足页模型：算出每个 vendor 的钱包 + 该 vendor 的商品总额对照。"
   (let* ((odts (hunchentoot:session-value :login-shopping-cart))
 	 (vendor-list (get-shopcart-vendorlist odts))
 	 (company (get-login-customer-company)) 
@@ -2172,6 +2431,7 @@ Only shows sections based on availability flags and customer type."
       (list widget1))))
 
 (defun dod-controller-low-wallet-balance-for-shopcart ()
+  "URL: /hhub/dodcustlowbalanceshopcart —— 购物车付款时余额不足提示页。"
   (with-cust-session-check
     (with-mvc-ui-page "Low Wallet Balance" #'create-model-for-lowwalletbalanceforshopcart #'create-widgets-for-lowwalletbalanceforshopcart :role :customer)))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -2202,17 +2462,21 @@ Only shows sections based on availability flags and customer type."
       (list widget1))))
 
 (defun dod-controller-low-wallet-balance-for-orderitems ()
+  "URL: 订单某项付款时（订阅扣款）余额不足提示页。"
   (with-cust-session-check
     (with-mvc-ui-page "Low Wallet Balance" #'create-model-for-lowwalletbalancefororderitems #'create-widgets-for-lowwalletbalancefororderitems :role :customer)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun dod-controller-cust-login-as-guest ()
+  "URL: /hhub/dascustloginasguest?tenant-id=<id> —— 创建游客 session 进店。
+   失败 → 跳客户登录页；成功 → 进 /hhub/dodcustindex。"
   (let ((tenant-id (hunchentoot:parameter "tenant-id")))
     (unless  ( or (null tenant-id) (zerop (length tenant-id)))
       (if (equal (dod-cust-login-as-guest :tenant-id tenant-id) NIL) (hunchentoot:redirect "/hhub/customer-login.html") (hunchentoot:redirect  "/hhub/dodcustindex")))))
 
 (defun dod-controller-cust-login ()
+  "URL: /hhub/dodcustlogin —— 客户密码登录控制器。"
     (let  ( (phone (hunchentoot:parameter "phone"))
 	   (password (hunchentoot:parameter "password")))
       (unless (and  ( or (null phone) (zerop (length phone)))
@@ -2220,12 +2484,15 @@ Only shows sections based on availability flags and customer type."
 	    (if (equal (dod-cust-login  :phone phone :password password) NIL) (hunchentoot:redirect "/hhub/customer-login.html") (hunchentoot:redirect  "/hhub/dodcustindex")))))
 
 (defun dod-controller-cust-login-otpstep ()
+  "URL: 客户 OTP 登录第 1 步：生成 OTP 并发短信，再重定向到 OTP 输入页。"
   (let* ((phone  (hunchentoot:parameter "phone"))
 	 (context (format nil "hhubcustloginwithotp?phone=~A" phone)))
-    ;; Redirect to the OTP page 
+    ;; Redirect to the OTP page
     (generateotp&redirect "customer" "login" phone context)))
 
 (defun dod-controller-cust-login-with-otp ()
+  "URL: 客户 OTP 登录第 2 步：完成 OTP 验证后真正建立会话。
+   失败移除 session 并跳回登录页；成功跳到 /hhub/dodcustindex。"
   (let ((phone (hunchentoot:parameter "phone")))
     (unless (or (null phone) (zerop (length phone)))
       (if (null (dod-cust-login-with-otp  :phone phone))
@@ -2238,7 +2505,9 @@ Only shows sections based on availability flags and customer type."
 	  (hunchentoot:redirect  "/hhub/dodcustindex")))))
 
 (defun dod-controller-cust-ordersuccess ()
-  (with-cust-session-check 
+  "URL: /hhub/dodcustordsuccess —— 下单成功页。展示\"返回购物\"按钮；STANDARD
+   客户额外展示\"My Orders\"链接。"
+  (with-cust-session-check
     (let ((cust-type  (slot-value (get-login-customer) 'cust-type)))
       (with-standard-customer-page-v2
 	 "Welcome to Nine Stores - Add Customer Order"
@@ -2257,7 +2526,9 @@ Only shows sections based on availability flags and customer type."
 		       (:a :class "btn btn-primary" :role "button" :href (format nil "dodmyorders") " My Orders Page")))))))))
   
   
-(defun send-order-email-guest-customer(order-id email temp-customer products shopcart shipping-cost paymentmode) 
+(defun send-order-email-guest-customer(order-id email temp-customer products shopcart shipping-cost paymentmode)
+  "为游客订单发邮件。生成订单内容字符串后通过 *NSTSENDORDEREMAILACTOR* 异步发送
+   （actor 行为见 send-order-email-behavior）。"
   (let* ((shopcart-total (get-shop-cart-total shopcart))
 	 (subject (format nil "Nine Stores order ~A" order-id))
 	 (order-disp-str (create-order-email-content products shopcart temp-customer order-id shipping-cost shopcart-total paymentmode)))
@@ -2294,6 +2565,9 @@ Only shows sections based on availability flags and customer type."
 		     (check-wallet-balance total wallet))) vendor-list wallet-list)))
 
 (defun ordertemplatefill (ordertemplate order orderitems orderitemshtmlfunc qrcodepath  currency vendor)
+  "把订单模板中的 %占位符% 用实际数据填充：vendor 头部 + 订单字段 + GST 计算（CGST/SGST/IGST）+
+   付款 QR + 行项 HTML（来自 orderitemshtmlfunc）。
+   返回 thunk；调用 thunk 才执行替换并返回最终模板字符串（延迟执行）。"
   (function (lambda ()
     (with-slots (name address gstnumber state) vendor
       (setf ordertemplate (cl-ppcre:regex-replace-all "%Vendor Name%" ordertemplate name))
@@ -2341,6 +2615,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun ordertemplatefillitemrows (orderitems products)
+  "构造订单行项 HTML 的延迟函数：mapcar over (orderitems, products) 一一对应渲染行。
+   每行带自增编号（incr 闭包）。"
   (function (lambda ()
     (cl-who:with-html-output-to-string (*standard-output* nil)
 	(let ((incr (let ((count 0)) (lambda () (incf count)))))
@@ -2367,6 +2643,14 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun create-model-for-custordercreate ()
+  "下单核心模型：从 session :customer-clipboard 取出收银台收集的所有参数，
+   走 with-hhub-transaction PEP 鉴权后：
+   ① 若 paymentmode='PRE'，先 check-all-vendors-wallet-balance，钱包不足 → 跳余额不足页；
+   ② 否则调 create-order-from-shopcart 创建订单（含主单、子单、行项）；
+   ③ 按 cust-type + 是否有邮箱/电话异步触发 GUEST/STANDARD 邮件 / 短信通知；
+   ④ reset 收银台参数；刷新 session 订单缓存；清空购物车。
+   返回 thunk 携带最终重定向 URL（成功 → /hhub/dodcustordsuccess）。
+   备注：dispatch 表用 hash 实现，避免大量 if 链。"
   (let* ((params nil)
 	 (orderparams-ht (get-cust-order-params))
 	 (order-items (gethash "shoppingcart" orderparams-ht))
@@ -2452,18 +2736,25 @@ Only shows sections based on availability flags and customer type."
 	  (values redirectlocation))))))
 	
 (defun com-hhub-transaction-create-order ()
+  "URL: 下单提交控制器。要求登录；走 with-mvc-redirect-ui 完成 model+widgets 后重定向。
+   PEP key = \"com-hhub-transaction-create-order\"。"
   (with-cust-session-check
     (with-mvc-redirect-ui #'create-model-for-custordercreate #'create-widgets-for-genericredirect)))
-    
 
-(defun save-cust-order-params (list) 
+
+(defun save-cust-order-params (list)
+  "把整个收银台参数表存到 session :customer-clipboard。"
   (setf (hunchentoot:session-value :customer-clipboard) list))
 (defun get-cust-order-params()
+  "从 session 取收银台参数表。"
   (hunchentoot:session-value :customer-clipboard))
 (defun reset-cust-order-params()
+  "清空 session :customer-clipboard（下单完成后调用）。"
   (setf (hunchentoot:session-value :customer-clipboard) nil))
 
 (defun create-model-for-custaddorderotpstep ()
+  "下单 OTP 步骤模型：把支付方式存进 session 收银台；
+   GUEST 客户跳到 OTP 输入页；STANDARD 直接跳到只读购物车页。"
   (let* ((orderparams-ht (get-cust-order-params))
 	 (phone  (hunchentoot:parameter "phone"))
 	 (context "dodcustshopcartro")
@@ -2487,15 +2778,21 @@ Only shows sections based on availability flags and customer type."
 
   
 (defun dod-controller-cust-add-order-otpstep ()
-  ;; no need to check for customer session as this might be a guest login. 
+  "URL: 下单流程进入 OTP 步骤的控制器。
+   备注：源码注释提示\"游客登录无需校验 session\"，但实际仍套了
+   with-cust-session-check（可能游客 session 也由它创建/兼容，推测）。"
+  ;; no need to check for customer session as this might be a guest login.
   (with-cust-session-check
     (with-mvc-redirect-ui #'create-model-for-custaddorderotpstep #'create-widgets-for-genericredirect)))
     
 (defun maybe-save-guest-customer (save-address? phone name email fulladdress company)
-  "Create a new STANDARD customer only if:
-   - Checkbox Save Address? is checked
-   - Customer does not already exist
-   - Customer not already saved during this checkout session."
+  "Original English. 中文：游客在结算页勾选 \"Save this address for future orders?\"
+   时，把游客升级为 STANDARD 客户写库。三段判断：
+   - save-address? 为 nil → 不做任何事；
+   - 本会话已经保存过 → 直接返回上次存的 customer 实例；
+   - 数据库已有同 phone 客户 → 返回该客户；
+   - 其余情况 → make-instance + 写库 + 发欢迎邮件 + 存到 session 防重复。
+   返回：新/已存在的 dod-cust-profile 实例 / nil。"
   ;; If user did NOT check the checkbox, do nothing.
   (if (not save-address?)
       nil
@@ -2543,6 +2840,12 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun create-model-for-custshipmethodspage ()
+  "运费方式页模型（结算流程第 2 步）。从表单读取地址 + GST 信息后：
+   ① 算 GST/CGST/SGST/IGST 更新购物车行项；
+   ② 调 calculate-shipping-cost-for-order 返回 (运费, 选项列表, 免运阈值, 渲染函数)；
+   ③ 把所有信息塞进 orderparams-ht 后调 save-cust-order-params 暂存；
+   ④ GUEST 客户：维护 :temp-guest-customer 与可选注册（Save Address 勾选）。
+   返回 thunk 给下层 widget。"
   (let* ((lstshopcart (hunchentoot:session-value :login-shopping-cart))
 	 (cust-type (get-login-customer-type))
 	 (vendor-list (get-shopcart-vendorlist lstshopcart))
@@ -2635,6 +2938,8 @@ Only shows sections based on availability flags and customer type."
       (values shopcart-total shiplst storepickupenabled singlevendor freeshipenabled custcomp)))))
 
 (defun create-widgets-for-custshipmethodspage (modelfunc)
+  "运费方式页 widgets：面包屑 + 表单（包含 Previous/Next + 运费选项 widget），
+   提交到 /hhubcustpaymentmethodspage 进入支付方式页。"
   (multiple-value-bind (shopcart-total shiplst storepickupenabled singlevendor freeshipenabled company)
       (funcall modelfunc)
     (let* ((widget1 (function (lambda ()
@@ -2658,11 +2963,14 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-cust-shipping-methods-page ()
+  "URL: /hhub/hhubcustshippingmethodspage —— 运费方式选择页控制器。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer Shipping Methods" #'create-model-for-custshipmethodspage #'create-widgets-for-custshipmethodspage :role :customer)))
 
 
 (defun normalize-billing-address (formdata)
+  "把账单地址正规化：当用户勾选\"账单同收货\"或账单字段缺失时，用收货地址覆盖。
+   返回多值 (billaddr billcity billstate billzip)。纯函数（不读 session/不写库）。"
   (destructuring-bind (shipaddr shipcity shipstate shipzip billaddr billcity billstate billzip samep)
       formdata
     ;; If same-as-ship checkbox true OR billing missing, override
@@ -2679,8 +2987,17 @@ Only shows sections based on availability flags and customer type."
     (values billaddr billcity billstate billzip)))
 
 
-;; This is a pure function. 
+;; This is a pure function.
 (defun calculate-shipping-cost-for-order (vshipping-method shipzipcode shopcart-total shopping-cart products vendor company)
+  "计算订单运费的核心调度。返回一个 4 元素 list (shipping-cost, shipping-options,
+   freeshipminorderamt, html-page-render-fn)。
+   规则（按 vendor 设置取并集；纯 SALE 商品才参与付费运费计算）：
+   ① 若 storepickupenabled='Y' → 加入 Pickup-from-Store 选项（cost=0）。
+   ② 若 freeshippingenabled='Y' 且 shopcart-total ≥ 阈值 → 加入 Free-Shipping。
+   ③ 否则按 defaultshipmethod 选择 FRS/TRS/EXS 三类付费运费方式之一计算 cost。
+   ④ 选项为空则返回 nil 选项 + +page-no-options-available+ 标记。
+   ⑤ 排序选项按 cost 升序，标 is-default。
+   ⑥ determine-shipping-html-page 决定渲染哪一页。"
   (let* ((vshipping-enabled (slot-value vendor 'shipping-enabled))
 	 (storepickupenabled (slot-value vshipping-method 'storepickupenabled))
 	 (freeshippingenabled (slot-value vshipping-method 'freeshipenabled))
@@ -2777,6 +3094,9 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun determine-default-shipping-option (shipping-options calculated-free-shipping-applies)
+  "对运费选项按 cost 升序排序，并把 :is-default t 打到合适的选项上：
+   - 免运费可用 → 默认 Free-Shipping；
+   - 否则 → 默认最便宜的（pickup 或最低付费）。"
   (setf shipping-options (sort shipping-options #'< :key #'(lambda (opt) (getf opt :cost))))
   (let ((default-option nil))
     (cond
@@ -2794,6 +3114,11 @@ Only shows sections based on availability flags and customer type."
        
 
 (defun determine-shipping-html-page (shipping-options calculated-free-shipping-applies  has-pickup-option)
+  "选择运费页的渲染函数引用：
+   - 免运费成立 → render-free-shipping-page；
+   - 仅 pickup 可用 → render-pickup-only-page；
+   - 其他 → 仍走 render-free-shipping-page（推测：应是想用 standard 页，
+     源代码 cond 默认分支有点意外，可能是早期只有这两页）。"
   (let ((html-page-to-display nil))
     (cond
       ;; If free shipping applied for the order, show the dedicated free shipping page.
@@ -2813,7 +3138,9 @@ Only shows sections based on availability flags and customer type."
     
 
 (defun create-model-for-custshowshopcartreadonly ()
-  (let* ((orderparams-ht (get-cust-order-params)) 
+  "结算流程最终只读购物车页模型：从 :customer-clipboard 取出全部参数，
+   计算合计 / GST / 运费 / 应付金额；构造 dod-order 草稿（不写库）以便页面预览。"
+  (let* ((orderparams-ht (get-cust-order-params))
 	 (customer (get-login-customer))
 	 (company (get-login-customer-company))
 	 (context-id "")
@@ -2895,6 +3222,9 @@ Only shows sections based on availability flags and customer type."
       (values odate reqdate payment-mode utrnum phone email shipaddress shipcity shipstate shipzipcode billaddress billcity billstate billzipcode billsameasshipchecked claimitcchecked gstnumber gstorgname shopcart-total shipping-cost company-type order-cxt wallet-id  orderpickupinstore vendoraddress vshipping-enabled currsymbol ordertemplate )))))
 
 (defun create-widgets-for-custshowshopcartreadonly (modelfunc)
+  "结算只读购物车页 widgets：
+   ① 面包屑；② 订单头摘要 + 总计 + 在线支付 widget 或 Place Order 按钮（按 payment-mode +
+   公司订阅类型选择）；③ 渲染填好的订单模板预览；④ 自取/不发货时显示门店自取信息。"
   (multiple-value-bind
    (odate reqdate payment-mode utrnum phone email shipaddress shipcity shipstate shipzipcode billaddress billcity billstate billzipcode billsameasshipchecked claimitcchecked gstnumber gstorgname shopcart-total shipping-cost company-type order-cxt wallet-id  orderpickupinstore vendoraddress vshipping-enabled currsymbol ordertemplate )
          (funcall modelfunc)
@@ -2956,11 +3286,13 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-cust-show-shopcart-readonly()
+  "URL: /hhub/dodcustshopcartro —— 结算流程最终只读购物车页（提交前最后确认）。"
   (with-cust-session-check
     (with-mvc-ui-page "Customer Shopping Cart Final" #'create-model-for-custshowshopcartreadonly #'create-widgets-for-custshowshopcartreadonly :role :customer)))
 			   
-; This is a pure function. 
-(defun get-order-items-total-for-vendor (vendor order-items) 
+; This is a pure function.
+(defun get-order-items-total-for-vendor (vendor order-items)
+  "汇总指定 vendor 在 order-items 中的总金额（每行 单价折后 × 数量；筛选 vendor-id 匹配项）。"
   (let ((vendor-id (slot-value vendor 'row-id)))
     (reduce #'+ (remove nil (mapcar (lambda (item)
 				      (let ((pricewith-discount (calculate-order-item-cost item))
@@ -2969,13 +3301,15 @@ Only shows sections based on availability flags and customer type."
 					    (* pricewith-discount prd-qty)))) order-items)))))
 
 (defun get-shop-cart-total (order-items)
+  "购物车总额：sum( pricewith-discount × prd-qty )。"
   (let* ((total (reduce #'+  (mapcar (lambda (item)
 				       (let* ((pricewith-discount (calculate-order-item-cost item)) 
 					      (prd-qty (slot-value item 'prd-qty)))
 					 (* pricewith-discount prd-qty))) order-items))))
     total ))
 
-(defun get-opref-items-total-for-vendor (vendor opref-items) 
+(defun get-opref-items-total-for-vendor (vendor opref-items)
+  "汇总指定 vendor 在订阅订单 opref-items 中的总金额。"
  (let ((vendor-id (slot-value vendor 'row-id)))
   (reduce #'+ (remove nil (mapcar (lambda (item) 
 				    (let* ((product (get-opf-product item))
@@ -2987,10 +3321,12 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun filter-order-items-by-vendor (vendor order-items)
+  "从 order-items 中筛出属于指定 vendor 的行项。"
   (let ((vendor-id (slot-value vendor 'row-id)))
 	(remove nil (mapcar (lambda (item) (if (equal vendor-id (slot-value item 'vendor-id)) item)) order-items))))
 
 (defun filter-opref-items-by-vendor (vendor opref-items)
+  "从 opref-items（订阅订单）中筛出属于指定 vendor 的项。"
   (let ((vendor-id (slot-value vendor 'row-id)))
 	(remove nil (mapcar (lambda (item) 
 			      (let* ((product (get-opf-product item))
@@ -3002,19 +3338,23 @@ Only shows sections based on availability flags and customer type."
 	
 ;This is a pure function without any side effects.
 (defun get-shopcart-vendorlist (shopcart-items)
-(remove-duplicates  (mapcar (lambda (odt) 
+  "从购物车的行项列表中提取去重后的 vendor 实例列表（按 row-id 去重）。"
+(remove-duplicates  (mapcar (lambda (odt)
 	   (select-vendor-by-id (slot-value odt 'vendor-id)))  shopcart-items)
 :test #'equal
 :key (lambda (vendor) (slot-value vendor 'row-id)))) 
 
-(defun get-opref-vendorlist (opreflist) 
-  (remove-duplicates (mapcar (lambda (opref) 
+(defun get-opref-vendorlist (opreflist)
+  "从订阅订单列表中提取去重后的 vendor 实例列表（按 row-id 去重）。"
+  (remove-duplicates (mapcar (lambda (opref)
 			       (let ((product (get-opf-product opref))) 
 				 (product-vendor product))) opreflist) 
 		     :test #'equal
 		     :key (lambda (vendor) (slot-value vendor 'row-id))))
 
 (defun create-model-for-custupdatecart ()
+  "更新购物车数量的模型：?prd-id=<id>&prdqty=<qty>，在 session 购物车中找到对应行
+   修改 prd-qty。返回重定向 /hhub/dodcustshopcart。"
   (let* ((prd-id (hunchentoot:parameter "prd-id"))
 	 (prd-qty (hunchentoot:parameter "prdqty"))
 	 (myshopcart (hunchentoot:session-value :login-shopping-cart))
@@ -3031,19 +3371,24 @@ Only shows sections based on availability flags and customer type."
       (list widget1))))
 
 (defun dod-controller-cust-update-cart ()
-    :documentation "update the shopping cart by modifying the product quantity"
+    :documentation "Original English. 中文：URL: /hhub/dodcustupdatecart 修改购物车数量。"
   (with-cust-session-check
     (let ((uri (with-mvc-redirect-ui #'create-model-for-custupdatecart #'create-widgets-for-custupdatecart)))
       (format nil "~A" uri))))
 		 
 (defun dod-controller-create-cust-wallet ()
-  :documentation "If the customer wallet is not defined, then define it now"
+  :documentation "Original English. 中文：URL: 给登录客户在指定 vendor 处创建钱包
+   （如尚未定义）。?vendor-id=<id>。"
   (let ((vendor (select-vendor-by-id (hunchentoot:parameter "vendor-id"))))
     (if vendor (create-wallet (get-login-customer) vendor (get-login-customer-company)))
     (if vendor (hunchentoot:log-message* :info "Created wallet for vendor ~A" (slot-value vendor 'name)))
     (hunchentoot:redirect (format nil "/hhub/dodcustindex"))))
 
 (defun create-model-for-custaddtocart ()
+  "添加到购物车的模型：?prd-id=<id>&prdqty=<qty>。
+   从 product 找到 vendor 与 wallet：未建钱包 → 跳到 createcustwallet 创建后再回来；
+   有钱包且 prdqty>0 → 把行项 append 到 session :login-shopping-cart，
+   并把 vendor 设为 :login-active-vendor。"
   (let* ((prd-id (parse-integer (hunchentoot:parameter "prd-id")))
 	 (prdqty (parse-integer (hunchentoot:parameter "prdqty")))
 	 (productlist (hunchentoot:session-value :login-prd-cache))
@@ -3073,7 +3418,7 @@ Only shows sections based on availability flags and customer type."
       (list widget1))))
 
 (defun dod-controller-cust-add-to-cart ()
-  :documentation "This function is responsible for adding the product and product quantity to the shopping cart."
+  :documentation "Original English. 中文：URL: /hhub/dodcustaddtocart 加入购物车。"
   (with-cust-session-check
     (let ((uri (with-mvc-redirect-ui #'create-model-for-custaddtocart #'create-widgets-for-custaddtocart)))
       (format nil "~A" uri))))
@@ -3081,6 +3426,8 @@ Only shows sections based on availability flags and customer type."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;; PRODUCT DETAIL PAGE FOR SHARED PUBLIC VIEW ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defun create-model-for-prddetailsforguestcustomer ()
+  "公开分享商品详情页的模型：?key=<base64> 解码出 (tenant-id, prd-id) 二元组，
+   走 dod-cust-login-as-guest（300 秒会话）后查商品 + 客户 + 是否在购物车。"
   (let* ((parambase64 (hunchentoot:parameter "key"))
 	 (param-csv (cl-base64:base64-string-to-string (hunchentoot:url-decode parambase64)))
 	 (paramslist (first (cl-csv:read-csv param-csv
@@ -3100,6 +3447,7 @@ Only shows sections based on availability flags and customer type."
 	(values product customer prdinshopcart))))))
 
 (defun create-widgets-for-prddetailsforguestcustomer (modelfunc)
+  "公开分享商品详情页 widgets：直接渲染 product-card-with-details-for-customer。"
   (multiple-value-bind (product customer prdinshopcart) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (product-card-with-details-for-customer product customer prdinshopcart)))))
@@ -3107,12 +3455,15 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-prd-details-for-guest-customer ()
+  "URL: 公开/可分享的商品详情页。无登录守卫；进入时自动以游客身份建立会话。"
   (with-mvc-ui-page "Product Details Public" #'create-model-for-prddetailsforguestcustomer #'create-widgets-for-prddetailsforguestcustomer :role :customer))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; END PRODUCT DETAIL PAGE FOR SHARED PUBLIC VIEW ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun customer-add-to-cart-widget (units-in-stock product product-pricing prd-id prdincart-p numitemsincart)
-  :description "Create the HTML required for Add to Cart button"
+  :description "Original English. 中文：渲染商品页\"加入购物车\"按钮。已加购显示绿色对勾；
+   有库存显示加购按钮 + 弹出数量选择 modal；缺货显示\"Out Of Stock\"；购物车非空时
+   附带\"Go to Cart\"快捷入口。"
   (let ((idsubmitevent (format nil "idprdaddtocart~A~A" prd-id (gensym))))
   (cl-who:with-html-output (*standard-output* nil)   
     (with-catch-submit-event idsubmitevent
@@ -3139,6 +3490,7 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-customer-search-vendor ()
+  "URL: /hhub/hhubcustvendorsearch —— 客户端按名搜卖家的 AJAX 接口。"
   (with-cust-session-check
     (let* ((company (get-login-customer-company))
 	   (search-clause (hunchentoot:parameter "vendorlivesearch"))
@@ -3149,6 +3501,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun create-model-for-customerindexpage ()
+  "客户首页模型：从 session 各类缓存（购物车 / 类目 / 商品 / 卖家 / 当前活跃 vendor）
+   取数据，并随机选一个类目作为本次推荐展示。商品超过 100 时只展示前 100。"
   (let* ((lstshopcart (hunchentoot:session-value :login-shopping-cart))
 	 (lstcount (length lstshopcart))
 	 (lstprodcatg (hunchentoot:session-value :login-prdcatg-cache))
@@ -3166,6 +3520,8 @@ Only shows sections based on availability flags and customer type."
       (values lstshopcart lstproducts lstcount lstprodcatg  selectedcatgid selectedcatgname  lstvendors activevendor prdcount first100products)))))
     	 
 (defun create-widgets-for-customerindexpage (modelfunc)
+  "客户首页 widgets：购物车浮标 + 商品轮播 + 卖家列表/搜索 + 类目 + 推荐 + 商品列表 +
+   WhatsApp（仅当 active vendor 已设置）。"
   (multiple-value-bind
 	(lstshopcart lstproducts lstcount lstprodcatg  selectedcatgid selectedcatgname  lstvendors activevendor prdcount first100products)
       (funcall modelfunc)
@@ -3206,15 +3562,18 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun dod-controller-cust-index ()
+  "URL: /hhub/dodcustindex —— 客户登录后首页（PWA 主入口）。"
   (with-cust-session-check
     (with-mvc-ui-page "Welcome Customer" #'create-model-for-customerindexpage #'create-widgets-for-customerindexpage :role :customer)))
 
 (defun shopping-cart-widget (itemscount target)
-  (cl-who:with-html-output (*standard-output* nil) 
+  "渲染浮动购物车图标 + 红色 badge 数量；点击跳到 target URL。"
+  (cl-who:with-html-output (*standard-output* nil)
     (:a :id "floatingcheckoutbutton" :href target :style "font-weight: bold; font-size: 20px !important;"  (:i :class "fa-solid fa-cart-shopping") (:span :class "position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" (cl-who:str (format nil "~A" itemscount))))))
 
 (defun product-search-widget (itemscount)
-  (cl-who:with-html-output (*standard-output* nil) 
+  "渲染商品搜索框 + Buy Now 按钮（带 badge 数量）。"
+  (cl-who:with-html-output (*standard-output* nil)
     (:br)
     (with-html-div-row
       (with-html-div-col-6
@@ -3225,6 +3584,7 @@ Only shows sections based on availability flags and customer type."
 	(:a :class "btn btn-lg btn-primary btn-block" :href "dodcustshopcart" :style "font-weight: bold; font-size: 20px !important;" "Buy Now " (:i :class "fa-solid fa-cart-shopping") (:span :class "position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" (cl-who:str (format nil "~A" itemscount))))))))
 
 (defun create-model-for-custprodbycatg()
+  "按类目筛商品的页面模型：?id=<catg-id>。"
   (let* ((catg-id (parse-integer (hunchentoot:parameter "id")))
 	 (lstshopcart (hunchentoot:session-value :login-shopping-cart))
 	 (lstproducts (hunchentoot:session-value :login-prd-cache))
@@ -3246,13 +3606,14 @@ Only shows sections based on availability flags and customer type."
       (list widget1 widget2 widget3 widget4)))) 
 
 (defun dod-controller-customer-products-by-category ()
-  :documentation "This function lists the customer products by category"
+  :documentation "Original English. 中文：URL: /hhub/dodproductsbycatg?id=<catg-id> 按类目列商品。"
   (with-cust-session-check
     (with-mvc-ui-page "Products by Category" #'create-model-for-custprodbycatg #'create-widgets-for-custprodbycatg :role :customer)))
     	
 
 
 (defun create-model-for-custprodbyvendor ()
+  "按 vendor 筛商品的页面模型：?id=<vendor-id>。"
   (let* ((vendor-id (parse-integer (hunchentoot:parameter "id")))
 	 (vendor (select-vendor-by-id vendor-id))
 	 (vphone (slot-value vendor 'phone))
@@ -3289,12 +3650,14 @@ Only shows sections based on availability flags and customer type."
 	  (list widget1 widget2 widget3 widget4 widget5 widget6 widget7))))
 
 (defun dod-controller-customer-products-by-vendor ()
-  :documentation "This function lists the customer products by category"
+  :documentation "Original English mentions category. 中文：URL: /hhub/hhubcustvendorstore?id=<vendor-id>
+   —— 按 vendor 列出其商品（进入卖家专属\"店铺\"视图）。"
   (with-cust-session-check
     (with-mvc-ui-page "Products by vendor" #'create-model-for-custprodbyvendor #'create-widgets-for-custprodbyvendor :role :customer)))
 
 (defun display-products-by-category-widget (catg-id catg-name)
-  :documentation "This function lists the customer products by category"
+  :documentation "Original English. 中文：渲染某个类目下的商品（横向布局），
+   被 customer-index 选定推荐类目时使用。"
   (let* ((lstproducts (hunchentoot:session-value :login-prd-cache))
 	 (lstshopcart (hunchentoot:session-value :login-shopping-cart))
 	 (lstprodbycatg (if lstproducts (filter-products-by-category catg-id lstproducts))))
@@ -3306,7 +3669,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun display-vendors-widget (vendorlist)
-  :documentation "This function displays all the vendors for the given customers account"
+  :documentation "Original English. 中文：渲染卖家卡片网格。容器 #vendorlivesearchresult
+   会被 AJAX 替换为搜索结果。"
   (cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
     (:div :id "vendorlivesearchresult" :class "prd-vendors-container" :style "width: 100%; display:flex; overflow:auto;"
 	  ;;(:div :id "vendorlivesearchresult" 
@@ -3315,6 +3679,7 @@ Only shows sections based on availability flags and customer type."
 			    (cl-who:htm (:div :class "vendor-card" (vendor-card vendor)))) vendorlist)))))
 
 (defun create-model-for-custshowshopcart ()
+  "购物车页（可编辑）的模型：从 session 取购物车 + 商品缓存，算合计与币种。"
   (let* ((company (get-login-customer-company))
 	 (lstshopcart (hunchentoot:session-value :login-shopping-cart))
 	 (lstcount (length lstshopcart))
@@ -3328,6 +3693,8 @@ Only shows sections based on availability flags and customer type."
       (values lstshopcart lstcount  total products currsymbol)))))
       
 (defun create-widgets-for-custshowshopcart (modelfunc)
+  "购物车页 widgets：面包屑 + 顶部合计与 Checkout 按钮 + 行项表格 + JS 提交事件 + 底部
+   返回购物 / Checkout 按钮。"
   (multiple-value-bind (lstshopcart lstcount  total products currsymbol) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (with-customer-breadcrumb))))
@@ -3370,13 +3737,14 @@ Only shows sections based on availability flags and customer type."
       (list widget1 widget2 widget3 widget4 widget5))))
 	    
 (defun dod-controller-cust-show-shopcart ()
-    :documentation "This is a function to display the shopping cart."
+    :documentation "Original English. 中文：URL: /hhub/dodcustshopcart 购物车页。"
     (with-cust-session-check 
       (with-mvc-ui-page "Customer Shopcart" #'create-model-for-custshowshopcart #'create-widgets-for-custshowshopcart :role :customer)))
      
 
 (defun show-empty-shopping-cart ()
-  (cl-who:with-html-output (*standard-output* nil :prologue t :indent t)   
+  "渲染空购物车占位页面（提示 0 items + 返回购物按钮）。"
+  (cl-who:with-html-output (*standard-output* nil :prologue t :indent t)
     (with-html-div-row
       (with-html-div-col 
 	(:h4 "0 items in shopping cart") 
@@ -3384,6 +3752,8 @@ Only shows sections based on availability flags and customer type."
 
 
 (defun create-model-for-removeshopcartitem ()
+  "从购物车移除一项的模型：?action=remitem&id=<prd-id>。
+   购物车清空时同时清掉 :login-active-vendor。返回重定向 /hhub/dodcustshopcart。"
   (let ((action (hunchentoot:parameter "action"))
 	(prd-id (parse-integer (hunchentoot:parameter "id")))
 	(myshopcart (hunchentoot:session-value :login-shopping-cart))
@@ -3401,13 +3771,21 @@ Only shows sections based on availability flags and customer type."
       (list widget1))))
 
 (defun dod-controller-remove-shopcart-item ()
-    :documentation "This is a function to remove an item from shopping cart."
+    :documentation "Original English. 中文：URL: 移除购物车一项的控制器。"
     (with-cust-session-check
       (let ((uri (with-mvc-redirect-ui #'create-model-for-removeshopcartitem #'create-widgets-for-removeshopcartitem)))
 	(format nil "~A" uri))))
 
+;; ============================================================================
+;; 节段 10：客户登录入口（游客 / 密码 / OTP）
+;; ============================================================================
+
 (defun dod-cust-login-as-guest (&key tenant-id (session-time-limit 600))
-   (handler-case 
+  "为指定租户创建游客 session（phone='9999999999'+cust-type='GUEST' 的占位客户）。
+   同租户内已登录则不重建 session；建好后写入一组 :login-customer-* session 字段。
+   session-time-limit 默认 600 秒；若失败/异常则在外层吞错（handler-case 见上下文）。
+   返回：登录成功时返回 customer 实例，失败 nil。"
+   (handler-case
 	;expression
        (let* ((customer (car (clsql:select 'dod-cust-profile :where [and
 			      [= [:phone] "9999999999"]
@@ -3461,7 +3839,12 @@ Only shows sections based on availability flags and customer type."
     
 
 (defun dod-cust-login (&key phone password)
-  (handler-case 
+  "STANDARD 客户密码登录：以 phone+cust-type=STANDARD 在 DB 找客户，校验 password+salt。
+   未找到 → 重定向 /hhub/customer-login.html。
+   验证通过 → 启动 8 小时 session，预热 :login-prd-cache / :login-prdcatg-cache /
+   :login-cusopf-cache / :login-cusord-cache，并写 community-url cookie 用于后续游客快捷入口。
+   异常分支：CLSQL 2006 → stop+start 自愈后跳回登录页。"
+  (handler-case
 					;expression
       
       (let* ((customer (car (clsql:select 'dod-cust-profile :where [and
@@ -3515,7 +3898,11 @@ Only shows sections based on availability flags and customer type."
 								   (hunchentoot:redirect "/hhub/customer-login.html"))))))
 
 (defun dod-cust-login-with-otp (&key phone)
-  (handler-case 
+  "STANDARD 客户 OTP 登录的会话建立部分（OTP 验证已在更上游完成）。
+   找到客户 → 启动 8 小时 session + 预热多份缓存 + 写 community-url cookie，返回 T；
+   未找到客户 → 返回 nil（调用方据此跳转登录页）。
+   异常分支：CLSQL 2006 → stop+start 自愈。"
+  (handler-case
 					;expression
       (let* ((customer (car (clsql:select 'dod-cust-profile :where [and
 					  [= [:phone] phone]

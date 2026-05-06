@@ -1,10 +1,44 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— DDD 实体类骨架（BusinessServer / Context / Session / ...）
+;;;; 分层：BL（业务逻辑层 —— 领域基类）
+;;;; 文件：hhub/core/hhub-bl-ent.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：提供 DDD（领域驱动设计）+ Hexagonal Architecture 中的核心 CLOS 类骨架。
+;;;;       新风格代码（warehouse / customer / order / invoice 新接口）都基于这些
+;;;;       基类派生自己的领域对象。
+;;;;
+;;;; 类层级：
+;;;;   BusinessServer（绑定一台硬件/IP 的最顶层抽象）
+;;;;     └─ BusinessContext（业务上下文：vendor / customer / cad / opr 等）
+;;;;          └─ BusinessSession（登录会话）
+;;;;               ├─ VendorSessionObject（卖家专属会话）
+;;;;               └─ UserSessionObject（顾客/超管/CAD 会话）
+;;;;          └─ BusinessObjectRepository（实体仓储）
+;;;;               └─ BusinessObject（领域对象基类）
+;;;;                    ├─ BusinessObjectNIL/Unknown/Contradiction（容错）
+;;;;                    ├─ RequestModel / ResponseModel / ViewModel
+;;;;                    │   及其 NIL / Unknown / Contradiction 子类
+;;;;
+;;;;   服务类：BusinessService / AdapterService / PresenterService /
+;;;;           DBAdapterService（仓储基类）
+;;;;
+;;;;   视图类：View / JSONView / HTMLView / ViewNIL / ViewUnknown / ViewContradiction
+;;;;
+;;;;   通用 generic：init / setCompany / setException / db-save / db-fetch /
+;;;;                db-fetch-all / db-delete / Copy-{BusinessObject-To-DBObject /
+;;;;                DbObject-To-BusinessObject} 等。
+;;;;
+;;;; 关联：
+;;;;   下游使用方：core/hhub-bl-egn.lisp 模板代码 → 各业务模块的 nst-bl-<Entity>.lisp
+;;;;   关联架构：core/nst-bl-conflodis.lisp 的 Context Flow Dispatcher 调度本文件类
+;;;; ============================================================================
 (in-package :nstores)
 
 
-;; Level 1 
+;; Level 1
 ;; A business server is the highest level of business abstraction on the hardware
-;; level as it is tied to a single IP address 
+;; level as it is tied to a single IP address
 
 (defclass BusinessServer () 
   ((id :reader id

@@ -1,10 +1,43 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：customer 客户
+;;;; 分层：UI 控制器/视图层
+;;;; 文件：hhub/customer/nst-ui-prodetpag.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：客户端商品详情页（PWA 自助门店）的 UI 组件、模型与控制器。
+;;;;       负责渲染顶部菜单条（返回 / 订阅 / 分享 / 联系卖家 / 进店）+
+;;;;       商品详情主体（图片轮播、缩略图、价格、加购按钮）。
+;;;;       使用 nst- 风格的 ui-widget / ui-component / ui-page 抽象。
+;;;;
+;;;; 主要导出：
+;;;;   dod-controller-prd-details-for-customer   — 控制器入口（客户登录后查看商品详情）
+;;;;   create-model-for-prddetailsforcustomer    — 构造商品详情模型 thunk
+;;;;   create-widgets-for-prddetailsforcustomer  — 渲染商品详情页面
+;;;;   customer-product-detail-page              — 组装 ui-page
+;;;;   customer-product-detail-page-component    — 组件：菜单 widget + 主体 widget
+;;;;   customer-product-detail-menu-widget       — 顶部操作栏 widget
+;;;;   customer-product-detail-content-widget    — 商品详情主体 widget
+;;;;
+;;;; 关联：
+;;;;   上游使用方：客户 PWA 路由 /hhub/dodprddetailsforcustomer
+;;;;   下游依赖：products/* BL（产品/价格/库存查询）、core 的 with-mvc-ui-page、
+;;;;             nst-get-cached-product-template-func（产品详情模板缓存）、
+;;;;             com-hhub-attribute-company-prdsubs-enabled（PIP 属性）
+;;;; ============================================================================
+
 (in-package :nstores)
 
 
 ;; Product details for customer page
 
 (defun customer-product-detail-menu-widget (prd-id cmp-type subscribe-flag cust-type subscription-plan external-url  vendor-id)
+  "构造商品详情页顶部操作栏 widget（返回购物 / 订阅 / 分享 / 联系卖家 / 进店）。
+   参数：prd-id — 商品主键；cmp-type — 商家分类（如 COMMUNITY/STANDARD）；
+        subscribe-flag — 商品是否可订阅（'Y'/'N'）；cust-type — 客户类型；
+        subscription-plan — 商家订阅套餐；external-url — 商品外链；
+        vendor-id — 卖家主键。
+   返回：ui-widget 实例。
+   备注：订阅按钮仅在 subscribe-flag='Y'、PIP 允许、客户为 STANDARD 时显示。"
   (make-ui-widget
    (lambda ()
      (cl-who:with-html-output (*standard-output* nil)        
@@ -33,15 +66,19 @@
        (:hr)))))
 
 (defun customer-product-detail-content-widget (proddetailpagetempl)
-  (make-ui-widget 
+  "构造商品详情主体 widget。proddetailpagetempl 是已经把所有 %占位% 替换完的 HTML 字符串。"
+  (make-ui-widget
    (lambda ()
      (product-card-with-details-for-customer2  proddetailpagetempl))))
 
 (defun product-card-with-details-for-customer2 (proddetailpagetempl)
+  "把已渲染的商品详情 HTML 串原样写入 *standard-output*。"
   (cl-who:with-html-output (*standard-output* nil)
     (cl-who:str proddetailpagetempl)))
 
 (defun customer-product-detail-page-component ()
+  "组装客户端商品详情页 UI 组件：在调用模型 thunk 取出多值后，分别构造顶部菜单
+   widget 与主体 widget，按顺序返回。"
   (make-ui-component :customer-product-detail-page-component
 		     (lambda (mf)
 		       (multiple-value-bind (proddetailpagetempl prd-id cmp-type subscribe-flag cust-type subscription-plan external-url  vendor-id) (funcall mf)
@@ -49,15 +86,22 @@
 			       (customer-product-detail-content-widget proddetailpagetempl))))))
 
 (defun customer-product-detail-page ()
+  "构造 :customer 角色下的商品详情 ui-page，使用上面定义的组件。"
   (make-ui-page :customer
 		:customer-product-detail-page
 		(customer-product-detail-page-component)))
 
 (defun create-widgets-for-prddetailsforcustomer (modelfunc)
+  "with-mvc-ui-page 回调：把 modelfunc 喂给 ui-page 渲染器。"
   (render-ui-page (customer-product-detail-page) modelfunc))
 
 
 (defun create-model-for-prddetailsforcustomer ()
+  "构造商品详情页的模型。从 query string 取 id，到 session 缓存里找商品对象，
+   读取价格、图片、库存、订阅、卖家等数据，再用模板 #1 做占位符替换得到最终 HTML。
+   返回：thunk，调用产生 8 个值（详情 HTML、prd-id、cmp-type、subscribe-flag、
+        cust-type、subscription-plan、external-url、vendor-id）。
+   备注：模板里的 %xxx% 占位符通过 cl-ppcre:regex-replace-all 替换为实际控件 HTML。"
   (let* ((prd-id (parse-integer (hunchentoot:parameter "id")))
 	 (productlist (if (> prd-id 0) (hunchentoot:session-value :login-prd-cache)))
 	 (lstshopcart (hunchentoot:session-value :login-shopping-cart))
@@ -108,5 +152,7 @@
       (values proddetailpagetempl  prd-id  cmp-type subscribe-flag cust-type subscription-plan external-url  vendor-id)))))
 
 (defun dod-controller-prd-details-for-customer ()
-   (with-cust-session-check 
+  "客户端商品详情页控制器。需要客户已登录；URL 参数 ?id=<prd-id>。
+   通过 with-mvc-ui-page 串联 model + widgets 完成渲染。"
+   (with-cust-session-check
      (with-mvc-ui-page "Product Details Customer" #'create-model-for-prddetailsforcustomer #'create-widgets-for-prddetailsforcustomer :role :customer)))

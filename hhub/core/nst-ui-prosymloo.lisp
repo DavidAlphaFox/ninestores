@@ -1,10 +1,36 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— Project Symbol Lookup（开发期符号导航）
+;;;; 分层：UI 控制器/视图层
+;;;; 文件：hhub/core/nst-ui-prosymloo.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：扫描整个 :com.nstores.app 包下的全部符号，提取每个符号的
+;;;;       (name type file doc keywords) 元数据，把数据持久化到 nst-bl-funloodat.lisp
+;;;;       那种 (defun function-lookup-table () ...) 的格式。
+;;;;       同时提供超管后台的查询页：客户端 JS 实时过滤显示。
+;;;;
+;;;; 主要导出：
+;;;;   get-project-symbols / get-project-packages
+;;;;   load-old-data-and-keywords / write-final-lookup-file
+;;;;   generate-lookup-file                  — 主入口（重新生成 lookup 文件）
+;;;;   get-symbol-type / get-symbol-doc / get-symbol-file
+;;;;   create-model-for-project-symbols-lookup-page
+;;;;   create-widgets-for-project-symbols-lookup-page
+;;;;   com-hhub-controller-project-symbols-lookup-page
+;;;;
+;;;; 关联：
+;;;;   上游使用方：超管后台菜单
+;;;;   下游依赖：SWANK:FIND-DEFINITIONS-FOR-EMACS（取符号源文件）；
+;;;;             package :com.nstores.app
+;;;; ============================================================================
 ;; nst-ui-prosymloo.lisp came from Project Symbol Lookup
 (in-package :nstores)
 
 (defun get-project-symbols (system-name)
-  "Collects ALL defined symbols (internal and external functions, macros, and classes) 
-   from the project's packages."
+  "Collects ALL defined symbols (internal and external functions, macros, and classes)
+   from the project's packages.
+   中文：枚举 :com.nstores.app 包内所有"自有"符号（function/macro/class）。
+         过滤掉来自 :CL/:ASDF 等依赖包的导入符号。"
   (let ((symbols '())
         ;; Now we rely on the hardcoded package name from packages.lisp
         (project-packages (list (find-package :com.nstores.app)))) 
@@ -21,8 +47,9 @@
     (remove-duplicates symbols)))
 
 (defun get-project-packages (system-name)
-  "Returns a list containing the single main package for the :NSTORES system, 
-   based on the packages.lisp file."
+  "Returns a list containing the single main package for the :NSTORES system,
+   based on the packages.lisp file.
+   中文：当前实现忽略 system-name 参数，硬编码返回 :com.nstores.app 包。"
   (declare (ignore system-name)) ; Ignore the system-name argument as the package is hardcoded
   (let ((pkg (find-package :com.nstores.app)))
     (if pkg
@@ -33,7 +60,9 @@
 
 (defun load-old-data-and-keywords (output-file)
   "Loads existing lookup data (if file exists) and returns a hash table
-   mapping symbol names to their preserved keywords (the 5th element)."
+   mapping symbol names to their preserved keywords (the 5th element).
+   中文：先 load 旧的 lookup 文件，把 (NAME TYPE FILE DOC KEYWORDS) 中的 KEYWORDS 提取成
+         name → keywords 哈希表，用于在重新生成时保留人工录入的关键词。"
   (let ((old-data-ht (make-hash-table :test 'equal)))
     (when (probe-file output-file)
       (let ((*function-lookup-table* nil)) ; Define a local variable for load to bind to
@@ -55,7 +84,10 @@
 ;; --- Helper 2: Writing the Final File (Uses your exact format) ---
 
 (defun write-final-lookup-file (output-file new-data)
-  "Writes the collected and merged symbol data to the file in the specified function format."
+  "Writes the collected and merged symbol data to the file in the specified function format.
+   中文：把 new-data 写到 output-file，外层包成
+         (defun function-lookup-table () (function (lambda () '(...))))
+         以便其他代码 funcall 取数据。"
   (with-open-file (s output-file 
                      :direction :output 
                      :if-exists :supersede
@@ -72,8 +104,10 @@
 ;; --- Main Function: Orchestrator ---
 
 (defun generate-lookup-file (system-name output-file)
-  "Generates the symbol lookup data file by collecting all symbols, merging old keywords, 
-   and writing the data in a compiled function format."
+  "Generates the symbol lookup data file by collecting all symbols, merging old keywords,
+   and writing the data in a compiled function format.
+   中文：开发期主入口 —— 扫描全部符号 → 合并旧 keywords → 重写 output-file
+         （如 core/nst-bl-funloodat.lisp）。"
   (let* ((symbols (get-project-symbols system-name))
          (old-data-ht (load-old-data-and-keywords output-file))
          (new-data '()))
@@ -91,7 +125,9 @@
     (write-final-lookup-file output-file new-data)))
 
 (defun get-symbol-type (s)
-  "Determines the type of the given symbol S."
+  "Determines the type of the given symbol S.
+   中文：返回 'MACRO' / 'GENERIC-FUNCTION' / 'FUNCTION' / 'CLASS' /
+         'CONSTANT' / 'VARIABLE' / 'UNKNOWN'。"
   (cond
     ;; 1. Functions and Macros
     ((fboundp s)
@@ -112,7 +148,8 @@
     (t "UNKNOWN")))
 
 (defun get-symbol-doc (s type)
-  "Retrieves the documentation string for symbol S based on its determined TYPE."
+  "Retrieves the documentation string for symbol S based on its determined TYPE.
+   中文：根据 type 选 documentation 的查询维度（function/type/variable）；查不到返回空串。"
   (let ((doc-type 
           (cond 
             ((string-equal type "FUNCTION") 'function)
@@ -134,7 +171,9 @@
 
 (defun get-symbol-file (s)
   "Finds the file path where the symbol S is defined using SWANK:FIND-DEFINITIONS-FOR-EMACS.
-   Returns the pathname string or an empty string if not found."
+   Returns the pathname string or an empty string if not found.
+   中文：依赖 SWANK 的 find-definitions-for-emacs 反查符号源文件路径。
+         若 SWANK 未加载则告警并返回空串。错误时也返回空串。"
   (handler-case
       (let* ((swank-package (find-package :swank))
              (find-defs-symbol (when swank-package
@@ -164,7 +203,8 @@
       (warn "Error finding source for ~A: ~A" s e))))
 
 (defun create-widgets-for-project-symbols-lookup-page (modelfunc)
-  "Widget Factory: Calls the widget with the model data."
+  "Widget Factory: Calls the widget with the model data.
+   中文：渲染查询页两块 widget —— 输入框/结果表，以及内嵌 JS（lookupData 由 model 注入）实现客户端过滤。"
   (multiple-value-bind (jsondata) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -254,7 +294,8 @@
 ;; You can define these in the same package as your other UI functions (e.g., :com.nstores.app)
 
 (defun create-model-for-project-symbols-lookup-page ()
-  "Model: Prepares the lookup data for the view."
+  "Model: Prepares the lookup data for the view.
+   中文：把 function-lookup-table 的全部数据 JSON 序列化，注入到查询页 JS 里。"
   ;; Assumes *function-lookup-table* is loaded from lookup-data.lisp
   (let ((jsondata (json:encode-json-to-string (funcall (function-lookup-table)))))
      (function (lambda ()
@@ -263,5 +304,6 @@
 
 
 (defun com-hhub-controller-project-symbols-lookup-page ()
-  "Controller: Renders the symbol lookup page."
+  "Controller: Renders the symbol lookup page.
+   中文：超管菜单入口；只允许 :superadmin 访问。"
   (with-mvc-ui-page  "Symbol Lookup" #'create-model-for-project-symbols-lookup-page #'create-widgets-for-project-symbols-lookup-page :role :superadmin))

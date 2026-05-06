@@ -1,8 +1,32 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— Schema 迁移引擎（核心列表与执行器）
+;;;; 分层：平台基础（启动/运维）
+;;;; 文件：hhub/core/nst-sch-mig.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：内置一份 *migrations* 注册表（每条 = (版本号字符串 函数符号 描述)），
+;;;;       提供 apply-migrations 统一执行；用 DOD_SCHEMA_MIGRATIONS 表记录已应用版本，
+;;;;       保证幂等。同时提供一组 information_schema 查询工具：
+;;;;       column-exists-p / column-type-equals-p / index-exists-p /
+;;;;       foreign-key-exists-p / table-exists-p。
+;;;;
+;;;; 主要导出：
+;;;;   *migrations*                — 全部待跑/已跑的迁移列表
+;;;;   apply-migrations            — 主入口；连接 DB 后逐条幂等执行
+;;;;   get-applied-migrations      — 读取 DOD_SCHEMA_MIGRATIONS.version 列
+;;;;   migrate-2025May-add-product-code 等 —— 各条迁移函数本体
+;;;;
+;;;; 关联：
+;;;;   上游使用方：超管运维入口（手动调 apply-migrations）
+;;;;   下游依赖：crm-db-connect / installation/upgrades 中按需引入的 nst-dbu-*
+;;;; ============================================================================
 (in-package :nstores)
 
 
 
+;; *migrations*：迁移目录。每个元素为 (版本号 函数符号 描述)。
+;; 版本号用日期前缀（DDMMYYYY-）保证排序；apply-migrations 按列表顺序运行。
+;; 已经在 DOD_SCHEMA_MIGRATIONS 表中登记的版本号会被跳过，达到幂等效果。
 (defparameter *migrations*
   '(("05082025-add-product-code"  migrate-2025May-add-product-code "Added human readable Product code to DOD_PRD_MASTER table")
     ;; Add more migrations here
@@ -48,10 +72,15 @@
 
 
 (defun get-applied-migrations ()
+  "查询 DOD_SCHEMA_MIGRATIONS 表已应用的版本号列表。"
   (mapcar #'first
           (clsql:query "SELECT version FROM DOD_SCHEMA_MIGRATIONS ORDER BY row_id ASC" :field-names nil)))
 
 (defun apply-migrations (username password)
+  "运维入口：按 *migrations* 顺序执行所有未应用的迁移。
+   流程：crm-db-connect → 取已应用版本集合 → 跳过已应用 → 调用迁移函数 → 写 DOD_SCHEMA_MIGRATIONS。
+   错误兜底：遇任何 error 打到 *error-output* 后停止当前批次。
+   清理：unwind-protect 保证连接最终被 disconnect。"
   (unwind-protect
        (progn
          (crm-db-connect :servername *crm-database-server*
@@ -77,6 +106,7 @@
       (clsql:disconnect))))
 
 (defun column-exists-p (table column)
+  "查 information_schema 判断指定列是否存在（幂等迁移的护栏）。"
   (let* ((sql (format nil
                       "SELECT COUNT(*) FROM information_schema.columns
                        WHERE table_schema = DATABASE()
@@ -88,6 +118,8 @@
 
 
 (defun column-type-equals-p (table-name column-name expected-type)
+  "查 information_schema 判断列类型是否等于 expected-type（如 'DECIMAL(15,2)'）。
+   按 'DATA_TYPE(NUMERIC_PRECISION,NUMERIC_SCALE)' 拼成实际类型与 expected-type 比对。"
   (let* ((query (format nil
                         "SELECT DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE
                          FROM information_schema.columns
@@ -101,6 +133,7 @@
 
 
 (defun index-exists-p (table-name index-name)
+  "查 information_schema.statistics 判断索引是否存在。"
   (let* ((query (format nil
                         "SELECT 1 FROM information_schema.statistics
                          WHERE table_name = '~A' AND index_name = '~A' AND table_schema = DATABASE();"
@@ -109,6 +142,7 @@
     (not (null result))))
 
 (defun foreign-key-exists-p (table-name fk-name)
+  "查 information_schema.table_constraints 判断外键是否存在。"
   (let* ((query (format nil
                         "SELECT 1 FROM information_schema.table_constraints
                          WHERE table_name = '~A' AND constraint_name = '~A'
@@ -118,6 +152,7 @@
     (not (null result))))
 
 (defun table-exists-p (table)
+  "查 information_schema.tables 判断表是否存在。"
   (let* ((sql (format nil
                       "SELECT COUNT(*) FROM information_schema.tables
                        WHERE table_schema = DATABASE()
@@ -128,12 +163,14 @@
 
 
 (defun migrate-2025Sep-orderitem-upgrade-sgst ()
+  "迁移 2025-09：把 DOD_ORDER_ITEMS.SGST 类型改为 decimal(4,2)，并删除 TAXABLE_VALUE 列。"
   (when (column-exists-p "DOD_ORDER_ITEMS" "SGST")
     (clsql:execute-command "ALTER TABLE DOD_ORDER_ITEMS MODIFY COLUMN SGST decimal(4,2);"))
   (when (column-exists-p "DOD_ORDER_ITEMS" "TAXABLE_VALUE")
     (clsql:execute-command "ALTER TABLE DOD_ORDER_ITEMS DROP COLUMN TAXABLE_VALUE;")))
 
 (defun migrate-2025Aug-OrderItem-upgrade ()
+  "迁移 2025-08：给 DOD_ORDER_ITEMS 增加 TAXABLEVALUE / SGSTAMT / CGSTAMT / IGSTAMT / TOTALITEMVAL 五列。"
   ;; 1 - Add column - TAXABLE_VALUE
   (unless (column-exists-p "DOD_ORDER_ITEMS" "TAXABLEVALUE")
     (clsql:execute-command "ALTER TABLE DOD_ORDER_ITEMS ADD COLUMN TAXABLEVALUE  decimal(15,2);"))
@@ -152,6 +189,9 @@
 
 
 (defun migrate-2025May-add-discount-column ()
+  "迁移 2025-05：DOD_PRD_MASTER 增加 current_price / current_discount 两列；
+   原 unit_price 列若仍存在则删除。
+   备注：第一处 unless 条件似乎与意图相反（unless column-exists-p drop column）—— 推测为笔误。"
   ;; Add Current pricing and Current discount columns to dod_prd_master table
   (unless (column-exists-p "DOD_PRD_MASTER" "unit-price")
     (clsql:execute-command "ALTER TABLE DOD_PRD_MASTER DROP COLUMN unit_price;"))
@@ -164,6 +204,8 @@
 
 
 (defun migrate-2025May-add-product-code ()
+  "迁移 2025-05：给 DOD_PRD_MASTER 增加可读的 PRODUCT_CODE（PRDxxxxxx 格式）。
+   流程：加列 → 用 row_id 反填唯一值 → MODIFY NOT NULL → 加 UNIQUE 约束。"
   ;; 1 - Add column
   (unless (column-exists-p "DOD_PRD_MASTER" "PRODUCT_CODE")
     (clsql:execute-command "ALTER TABLE DOD_PRD_MASTER ADD COLUMN PRODUCT_CODE VARCHAR(50);"))
@@ -177,6 +219,10 @@
 
 
 (defun migrate-2025Jun-dod-order-schema ()
+  "迁移 2025-06：DOD_ORDER 表大改 —— 增加 ORDNUM / CUSTNAME / IS_CONVERTED_TO_INVOICE
+   / IS_CANCELLED / CANCEL_REASON / ORDER_SOURCE / EXPECTED_DELIVERY_DATE
+   / EXTERNAL_URL / TOTAL_DISCOUNT / TOTAL_TAX / SHIPADDR / BILLADDR 等列；
+   修改 ORDER_AMT 与 SHIPPING_COST 类型为 decimal(15,2)。"
   ;; Add missing columns to DOD_ORDER table based on the target schema
 
   ;; ORDNUM

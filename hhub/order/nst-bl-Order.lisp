@@ -1,14 +1,43 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-%
+;;;; ============================================================================
+;;;; 模块：order 订单 —— 订单业务逻辑（新 nst-* DDD/Hexagonal）
+;;;; 分层：BL（业务逻辑层 / 应用服务 + 仓储 + 表现层装配）
+;;;; 文件：hhub/order/nst-bl-Order.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：六边形架构下的 order 领域 CRUD 实现：
+;;;;   - Adapter（应用服务层）方法：ProcessCreateRequest / ProcessUpdateRequest /
+;;;;     ProcessReadRequest / ProcessReadAllRequest / ProcessResponse / ProcessResponseList
+;;;;   - Service（领域服务层）方法：doCreate / doread / doreadall / doupdate
+;;;;   - DBService（仓储层）方法：init / Copy-BusinessObject-To-DBObject /
+;;;;     CreateResponseModel / CreateViewModel / CreateAllViewModel
+;;;;   - 拷贝工具：createorderobject / copyorder-domaintodb / copyorder-dbtodomain
+;;;;   - GST 合计辅助：calculate-order-total{gst,cgst,sgst,igst,beforetax,aftertax}
+;;;;
+;;;; 主要导出：
+;;;;   六边形 CRUD 类簇方法（同上）
+;;;;   calculate-order-totalgst / -totalcgst / -totalsgst / -totaligst
+;;;;   calculate-order-totalbeforetax / -totalaftertax
+;;;;
+;;;; 关联：
+;;;;   上游使用方：order/nst-ui-Order.lisp（控制器/视图）
+;;;;   下游依赖：order/nst-dal-Order.lisp（实体）、order/dod-bl-ord.lisp（旧函数复用：
+;;;;             get-orders-for-customer / get-order-by-context-id 等）、
+;;;;             customer 模块（select-customer-by-id）、core 基类
+;;;;
+;;;; 备注：原作者标注模板代码，禁止单独 Ctrl+C Ctrl+K 编译；已纳入 nstores.asd 加载。
+;;;; ============================================================================
+
 (in-package :nstores)
 
-;; METHODS FOR ENTITY CREATE 
+;; METHODS FOR ENTITY CREATE
 ;; This file contains template code which will be used to generate for class methods.
 ;; DO NOT COMPILE THIS FILE USING CTRL + C CTRL + K (OR CTRL + CK)
-;; DO NOT ADD THIS FILE TO COMPILE.LISP FOR MASS COMPILATION. 
+;; DO NOT ADD THIS FILE TO COMPILE.LISP FOR MASS COMPILATION.
 
 
 (defmethod ProcessCreateRequest ((adapter orderAdapter) (requestmodel orderRequestModel))
-  :description  "Adapter Service method to call the BusinessService Create method. Returns the created Warehouse object."
+  :description  "Adapter Service method to call the BusinessService Create method. Returns the created Warehouse object.
+   中文：Create 流 Adapter 钩子。description 中的 'Warehouse' 系模板残留（推测），实际返回新建 order。"
     ;; set the business service
   (setf (slot-value adapter 'businessservice) (find-class 'orderService))
   ;; call the parent ProcessCreate
@@ -16,7 +45,8 @@
 
 
 (defmethod init ((dbas orderDBService) (bo order))
-  :description "Set the DB object and domain object"
+  :description "Set the DB object and domain object.
+   中文：DBService 初始化：构造空 dod-order DB 对象 + 注入 company 上下文 → call-next-method。"
   (let* ((DBObj  (make-instance 'dod-order)))
     ;; Set specific fields of the DB object if you need to. 
     ;; End set specific fields of the DB object. 
@@ -28,6 +58,8 @@
 
 
 (defmethod doCreate ((service orderService) (requestmodel orderRequestModel))
+  "中文：Create 实现：从 requestmodel 抽取所有字段，包装成多值闭包 → createorderobject 构造领域对象 →
+   init DBService → 拷贝到 DB 对象 → db-save。返回新建领域对象。"
   (let* ((orderdbservice (make-instance 'orderDBService))
 	 (customer (customer requestmodel))
 	 (ord-date (ord-date requestmodel))
@@ -74,6 +106,8 @@
 
 
 (defun createorderobject (modelfunc)
+  "中文：以多值闭包接收所有字段，构造一个 order 实例。新订单默认 deleted-state='N'。
+   备注：:company 在 :initargs 中出现两次（后者覆盖前者）—— 与 OrderItem 同样的小冗余。"
   (multiple-value-bind (ord-date req-date shipped-date expected-delivery-date ordnum shipaddr shipzipcode shipcity shipstate billaddr billzipcode billcity billstate billsameasship storepickupenabled gstnumber gstorgname order-fulfilled order-amt shipping-cost total-discount total-tax payment-mode comments context-id  status  is-converted-to-invoice is-cancelled cancel-reason order-type external-url order-source custname customer company) (funcall modelfunc)
   (let* ((domainobj  (make-instance 'order 
 				    :ord-date ord-date
@@ -116,13 +150,17 @@
     domainobj)))
 
 (defmethod Copy-BusinessObject-To-DBObject ((dbas orderDBService))
-  :description "Syncs the dbobject and the domainobject"
+  :description "Syncs the dbobject and the domainobject.
+   中文：领域对象 → DB 对象 拷贝。委托 copyorder-domaintodb。"
   (let ((dbobj (slot-value dbas 'dbobject))
 	(domainobj (slot-value dbas 'businessobject)))
     (setf (slot-value dbas 'dbobject) (copyorder-domaintodb domainobj dbobj))))
 
 ;; source = domain destination = db
-(defun copyorder-domaintodb (source destination) 
+(defun copyorder-domaintodb (source destination)
+  "中文：领域对象 → DB 对象 拷贝。把 source.company / customer 解包成 tenant-id / cust-id。
+   注意：customer slot 同时 setf 到 destination.customer 与 destination.cust-id（前者用于查询访问，
+   后者是真正的外键列）。"
   (let ((company (slot-value source 'company)))
     (with-slots (ord-date req-date shipped-date expected-delivery-date ordnum shipaddr shipzipcode shipcity shipstate billaddr billzipcode billcity billstate billsameasship storepickupenabled gstnumber gstorgname order-fulfilled order-amt shipping-cost total-discount total-tax payment-mode comments context-id customer status  is-converted-to-invoice is-cancelled cancel-reason order-type external-url order-source custname cust-id  tenant-id) destination
       (setf ord-date (slot-value source 'ord-date))
@@ -164,20 +202,23 @@
       destination)))
 
 
-;; PROCESS UPDATE REQUEST  
+;; PROCESS UPDATE REQUEST
 (defmethod ProcessUpdateRequest ((adapter orderAdapter) (requestmodel orderRequestModel))
-  :description "Adapter service method to call the BusinessService Update method"
+  :description "Adapter service method to call the BusinessService Update method.
+   中文：Update 流 Adapter 钩子。"
   (setf (slot-value adapter 'businessservice) (find-class 'orderService))
   ;; call the parent ProcessUpdate
   (call-next-method))
 
 ;; PROCESS READ ALL REQUEST.
 (defmethod ProcessReadAllRequest ((adapter orderAdapter) (requestmodel orderRequestModel))
-  :description "Adapter service method to read UPI Payments"
+  :description "Adapter service method to read UPI Payments.
+   中文：ReadAll 流 Adapter 钩子。description 系 UPI 模板拷贝（推测）。"
   (setf (slot-value adapter 'businessservice) (find-class 'orderService))
   (call-next-method))
 
 (defmethod doreadall ((service orderService) (requestmodel orderRequestModel))
+  "中文：批量读：调旧 BL 的 get-orders-for-customer 拿 DB 行列表，逐一拷贝成 order 领域对象列表。"
   (let* ((cust (customer requestmodel))
 	 (domainobjlst (get-orders-for-customer cust)))
     ;; return back a list of domain objects 
@@ -187,6 +228,7 @@
 
 
 (defmethod CreateViewModel ((presenter orderPresenter) (responsemodel orderResponseModel))
+  "中文：ResponseModel → ViewModel 字段透传（含 vendor / customer / created 等附加字段）。"
   (let ((viewmodel (make-instance 'orderViewModel)))
     (with-slots (row-id ord-date req-date shipped-date expected-delivery-date ordnum shipaddr shipzipcode shipcity shipstate billaddr billzipcode billcity billstate billsameasship storepickupenabled gstnumber gstorgname order-fulfilled order-amt shipping-cost total-discount total-tax payment-mode comments context-id  status deleted-state is-converted-to-invoice is-cancelled cancel-reason order-type external-url order-source custname  vendor customer company created) responsemodel
       (setf (slot-value viewmodel 'vendor) vendor)
@@ -233,21 +275,25 @@
   
 
 (defmethod ProcessResponse ((adapter orderAdapter) (busobj order))
+  "中文：单条 BO → ResponseModel 装配。"
   (let ((responsemodel (make-instance 'orderResponseModel)))
     (createresponsemodel adapter busobj responsemodel)))
 
 (defmethod ProcessResponseList ((adapter orderAdapter) orderlist)
+  "中文：批量 BO → ResponseModel。"
   (mapcar (lambda (domainobj)
 	    (let ((responsemodel (make-instance 'orderResponseModel)))
 	      (createresponsemodel adapter domainobj responsemodel))) orderlist))
 
 (defmethod CreateAllViewModel ((presenter orderPresenter) responsemodellist)
+  "中文：批量 ResponseModel → ViewModel。"
   (mapcar (lambda (responsemodel)
 	    (createviewmodel presenter responsemodel)) responsemodellist))
 
 
 (defmethod CreateResponseModel ((adapter orderAdapter) (source order) (destination orderResponseModel))
-  :description "source = order destination = orderResponseModel"
+  :description "source = order destination = orderResponseModel.
+   中文：领域对象 → ResponseModel 字段透传。"
   (with-slots (row-id ord-date req-date shipped-date expected-delivery-date ordnum shipaddr shipzipcode shipcity shipstate billaddr billzipcode billcity billstate billsameasship storepickupenabled gstnumber gstorgname order-fulfilled order-amt shipping-cost total-discount total-tax payment-mode comments context-id  status deleted-state is-converted-to-invoice is-cancelled cancel-reason order-type external-url order-source custname  vendor customer company created) destination  
     (setf row-id (slot-value source 'row-id))
     (setf ord-date (slot-value source 'ord-date))
@@ -291,6 +337,10 @@
 
 
 (defmethod doupdate ((service orderService) (requestmodel orderRequestModel))
+  "中文：Update 实现：按 (context-id, company) 在 DB 中定位 dod-order，逐字段 setf 更新后 db-save。
+   备注：context-id 是稳定业务键；row-id 也被覆盖（推测）但这里反向写入 DB row-id 通常无意义，
+   且 row-id 是主键，按经验不应被改 —— 此处可能是历史代码遗留，使用时需确保 requestmodel.row-id
+   与 orderdbobj.row-id 一致。"
   (with-slots (row-id ord-date req-date shipped-date expected-delivery-date ordnum shipaddr shipzipcode shipcity shipstate billaddr billzipcode billcity billstate billsameasship storepickupenabled gstnumber gstorgname order-fulfilled order-amt shipping-cost total-discount total-tax payment-mode comments context-id  status deleted-state is-converted-to-invoice is-cancelled cancel-reason order-type external-url order-source custname  vendor customer company created) requestmodel
     (let* ((orderdbservice (make-instance 'orderDBService))
 	   (orderdbobj (get-order-by-context-id context-id company))
@@ -347,11 +397,13 @@
 
 ;; PROCESS THE READ REQUEST
 (defmethod ProcessReadRequest ((adapter orderAdapter) (requestmodel orderRequestModel))
-  :description "Adapter service method to read a single order"
+  :description "Adapter service method to read a single order.
+   中文：Read 流 Adapter 钩子。"
   (setf (slot-value adapter 'businessservice) (find-class 'orderService))
   (call-next-method))
 
 (defmethod doread ((service orderService) (requestmodel orderRequestModel))
+  "中文：单条读：按 context-id 在 company 内查 dod-order，再 copyorder-dbtodomain 转领域对象。"
   (let* ((company (company requestmodel))
 	 (context-id (context-id requestmodel))
 	 (dborder (get-order-by-context-id context-id company))
@@ -362,6 +414,8 @@
 
 
 (defun copyorder-dbtodomain (source destination)
+  "中文：DB 对象 → 领域对象 字段拷贝。从 source.tenant-id 反查 company；
+   再用 cust-id 从 company 内查 customer 实例注入 destination。其它字段透传。"
   (let* ((comp (select-company-by-id (slot-value source 'tenant-id)))
 	 (cust (select-customer-by-id (slot-value source 'cust-id) comp)))
     (with-slots (row-id ord-date req-date shipped-date expected-delivery-date ordnum shipaddr shipzipcode shipcity shipstate billaddr billzipcode billcity billstate billsameasship storepickupenabled gstnumber gstorgname order-fulfilled order-amt shipping-cost total-discount total-tax payment-mode comments context-id  status deleted-state is-converted-to-invoice is-cancelled cancel-reason order-type external-url order-source custname vendor customer company) destination
@@ -407,6 +461,8 @@
       destination)))
  
 (defun calculate-order-totalgst (order orderitems vendor)
+  "中文：订单层 GST 总额计算。比较卖家州（vendor.state）与收货州（order.shipstate）：
+   同州 → CGST + SGST 之和；跨州 → 仅 IGST 之和。"
   (let ((placeofsupply (string-upcase (slot-value vendor 'state)))
 	(statecode (string-upcase (slot-value order 'shipstate))))
     (if (equal placeofsupply statecode)
@@ -415,19 +471,25 @@
 	(calculate-order-totaligst orderitems))))
 
 (defun calculate-order-totalcgst (orderitems)
+  "中文：行项 CGST 金额求和。"
   (reduce #'+ (mapcar (lambda (item) (slot-value item 'cgstamt)) orderitems)))
 
 (defun calculate-order-totalsgst (orderitems)
+  "中文：行项 SGST 金额求和。"
   (reduce #'+ (mapcar (lambda (item) (slot-value item 'sgstamt)) orderitems)))
 
 (defun calculate-order-totaligst (orderitems)
+  "中文：行项 IGST 金额求和。"
   (reduce #'+ (mapcar (lambda (item) (slot-value item 'igstamt)) orderitems)))
 
 
 (defun calculate-order-totalbeforetax (orderitems)
+  "中文：税前合计 = 各行项 taxablevalue 之和（fround 取整以减小浮点误差）。"
   (fround (reduce #'+ (mapcar (lambda (item) (slot-value item 'taxablevalue)) orderitems))))
 
 (defun calculate-order-totalaftertax (orderitems)
+  "中文：税后合计 = 各行项 (taxablevalue + cgstamt + sgstamt + igstamt) 之和（fround）。
+   注意此处对所有 GST 项做了相加 —— 若是跨州订单 cgst/sgst 应为 0，因此结果在两种场景下等价。"
   (fround (reduce #'+ (mapcar (lambda (item)
 				(let* ((cgstamt (slot-value item 'cgstamt))
 				       (sgstamt (slot-value item 'sgstamt))

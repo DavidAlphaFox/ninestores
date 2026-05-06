@@ -1,4 +1,23 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— UI 引擎类模板（DDD/六边形 UI 路由 + 视图渲染骨架）
+;;;; 分层：UI 控制器/视图层（模板代码生成器源）
+;;;; 文件：hhub/core/hhub-ui-egn.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：脚手架模板，含两类内容：
+;;;;   1) register-outbound-route 调用骨架（read / create / update / delete /
+;;;;      readall），把每个 CRUD 操作注册到 *NST-OUTBOUND-ROUTE-REGISTRY*；
+;;;;      view-classes 槽包含 Belnap 四值对应的 HTML/JSON 视图类（T/F/U/C）。
+;;;;   2) defmethod render / RenderJSONAll / RenderListViewHTML 等视图方法骨架，
+;;;;      把 ViewModel 转成 HTML/JSON 输出。
+;;;;
+;;;; 占位符：%entity-name%（实体名）、%0%..%37%（字段名）。
+;;;;
+;;;; 关联：
+;;;;   下游使用方：脚手架生成的 nst-ui-<Entity>.lisp
+;;;;   依赖：core/nst-bl-conflodis.lisp（register-outbound-route）、
+;;;;        core/hhub-bl-ent.lisp（View/HTMLView/JSONView 基类）
+;;;; ============================================================================
 (in-package :nstores)
 
 ;; Route registration for %entity-name% with TCUF view support

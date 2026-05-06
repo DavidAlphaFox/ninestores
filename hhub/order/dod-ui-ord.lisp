@@ -1,9 +1,35 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：order 订单 —— 订单视图与列表 UI（旧 dod-* MVC）
+;;;; 分层：UI（控制器 + CL-WHO 模板）
+;;;; 文件：hhub/order/dod-ui-ord.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：渲染各角色（客户/卖家）下的订单列表、订单详情入口、Excel 导出文本，
+;;;;       以及卖家维度按商品聚合 / 按客户聚合的订单列表。属于旧版 MVC 风格。
+;;;;
+;;;; 主要导出：
+;;;;   dod-controller-list-orders        — 控制器：当前公司订单总览（旧客户后台）
+;;;;   ui-list-orders                    — 渲染订单表格（HTML）
+;;;;   ui-list-orders-for-excel          — 把订单/行项渲染成 CSV 文本（导出 Excel）
+;;;;   ui-list-vendor-orders-by-products — 卖家视图：按商品聚合订单
+;;;;   ui-list-vendor-orders-by-customers— 卖家视图：按客户聚合订单
+;;;;   ui-list-customer-orders           — 客户"我的订单"列表
+;;;;   concat-ord-dtl-name               — 拼接订单内所有商品名（导出/邮件用）
+;;;;   vendor-order-card                 — 单个 vendor-order 简卡
+;;;;
+;;;; 关联：
+;;;;   上游使用方：客户后台 / 卖家后台路由（同名控制器）
+;;;;   下游依赖：order/dod-bl-ord.lisp、order/dod-bl-odt.lisp、product BL
+;;;; ============================================================================
+
 (in-package :nstores)
 ;;(clsql:file-enable-sql-reader-syntax)
 
 
 (defun dod-controller-list-orders ()
+  "中文：旧客户/CAD 后台订单总览控制器。
+   会话校验：is-dod-session-valid?，未登录跳转 /login。
+   行为：取当前 login-company 下所有订单，调用 ui-list-orders 渲染表格；空集返回 'No orders'。"
 (if (is-dod-session-valid?)
    (let (( dodorders (get-orders-by-company  (get-login-company)))
 	 (header (list  "Order No" "Order Date" "Customer" "Request Date"  "Ship Date" "Ship Address" "Action")))
@@ -12,6 +38,9 @@
 
 
 (defun ui-list-orders (header data)
+  "中文：把订单列表渲染成 Bootstrap 'table table-striped'。
+   header — 列标题列表；data — 单个订单或订单列表。
+   行尾给出 'Cancel Order' / 'Details' 两个按钮（链接到 delorder?id=... / orderdetails?id=...）。"
   (cl-who:with-html-output (*standard-output* nil)
       (:a :class "btn btn-primary" :role "button" :href (format nil "/dodcustindex") "Shop Now")
     (:h3 "Orders")
@@ -38,6 +67,9 @@
 
 
 (defun ui-list-orders-for-excel (header ordlist)
+  "中文：把卖家订单列表导出成 CSV 风格字符串（用于 Excel 下载）。
+   每个订单输出一段：订单号 + 客户 + 状态（Fulfilled/Pending）+ 多行商品 + Total。
+   返回：含 \\r\\n 行分隔的整段文本。"
   (cl-who:with-html-output-to-string (*standard-output* nil)
       (mapcar (lambda (item) (cl-who:str (format nil "~A," item ))) header)
       (cl-who:str (format nil " ~C~C" #\return #\linefeed))
@@ -65,8 +97,11 @@
 			(cl-who:str (format nil ",,,,Total, Rs. ~$~C~C" total #\return #\linefeed)))))) ordlist)))
 
 
-;; This function takes more time, please make it more efficient in future. 
+;; This function takes more time, please make it more efficient in future.
 (defun ui-list-vendor-orders-by-products (ordlist)
+  "中文：卖家维度，把订单按"商品"聚合展示：每行商品 = 总销售数量 + 小计 + 涉及订单链接。
+   依赖会话变量 :login-prd-cache、:order-func-list 做产品/订单缓存。
+   性能注：原作者注释提示这个函数较慢（嵌套 mapcar + 数据库查询），有优化余地。"
     (let*  ((vendor (get-login-vendor))
 	    (tenant-id (get-login-vendor-tenant-id))
 	    (company (get-login-vendor-company))
@@ -113,7 +148,9 @@
 
 
 (defun ui-list-vendor-orders-by-customers (ordlist)
- (cl-who:with-html-output (*standard-output* nil)	       
+  "中文：卖家维度按客户聚合订单。每条订单单独一段：客户/电话/收货地址，行项明细，门店自提提示，最后 Total。
+   GUEST 客户只显示订单号 + 备注，不暴露 PII。"
+ (cl-who:with-html-output (*standard-output* nil)
    (:a :class "btn btn-primary btn-xs" :role "button" :onclick "window.print();" :href "#" "Print&nbsp;&nbsp;"(:i :class "fa-solid fa-print"))
    ;; For every vendor order
    (mapcar (lambda (vord)
@@ -168,6 +205,8 @@
     
 
 (defun ui-list-customer-orders (header data)
+  "中文：客户'我的订单'列表。每行：订单号 / 下单日 / 期望日 + 详情链接 + FULFILLED 标签。
+   详情链接到 hhubcustmyorderdetails?id=。"
   (cl-who:with-html-output (*standard-output* nil)
     (:h3 "Orders")
     (:table :class "table table-striped table-hover"
@@ -189,12 +228,16 @@
 
 
 (defun concat-ord-dtl-name (order-instance)
+  "中文：把订单内所有行项的商品名以逗号尾接的字符串列表返回（导出/邮件正文展示用）。
+   返回：字符串列表（每项末尾带逗号，调用方自行拼接）。"
   (let ((odt ( get-order-items order-instance)))
     (mapcar (lambda (odt-ins)
 	      (concatenate 'string (slot-value (get-odt-product odt-ins) 'prd-name) ",")) odt)))
 
-; This is a pure function. 
+; This is a pure function.
 (defun vendor-order-card (vorder-instance)
+  "中文：渲染单条 vendor-order 的简要卡片：客户名 + 截断地址 + 订单号链接（弹出详情 modal）。
+   storepickupenabled='Y' 时附 luggage 图标。原注释 'pure function' 与实际不符（HTML 输出有副作用）。"
   (let* ((customer (get-customer vorder-instance))
 	 (company (get-company vorder-instance))
 	 (order-id (slot-value vorder-instance 'order-id))
