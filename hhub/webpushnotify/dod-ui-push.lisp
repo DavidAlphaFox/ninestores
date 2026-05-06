@@ -6,15 +6,17 @@
 ;;;; ----------------------------------------------------------------------------
 ;;;; 职责：浏览器端订阅 / 退订 / 测试推送的 HTTP 接口入口；以及"发送推送"的
 ;;;;       drakma 调用——通过相对路径 /push/notify/user 反代到 Node 边车
-;;;;       webpushserver/（PM2 :3333，Nginx 路径 /push/*）。
+;;;;       webpushserver/（PM2 :4345，Nginx 路径 /push/*）。
 ;;;;       请求头 auth-secret 携带共享密钥（当前硬编码为 \"highrisehub1234\"），
 ;;;;       Node 端 webpushserver 用相同密钥校验后才会调 web-push 库（VAPID）实际
 ;;;;       推送 P-256 加密 payload 到浏览器。
 ;;;;
-;;;;       端点（站内相对路径，最终代理到 Node 进程）：
-;;;;         POST /push/notify/user  —— 发送一条 push 通知（payload 字段：
+;;;;       站内相对路径（最终代理到 Node 进程）；HTTP 方法以 Node 端实现为准：
+;;;;         GET  /push/notify/user  —— 发送一条 push 通知（query 字段：
 ;;;;                                     title/message/clickTarget/endpoint/publicKey/auth）
-;;;;       兄弟模块 sms：POST /sms/sendsms 同样用 auth-secret 头。
+;;;;                                     —— Lisp 用 drakma:http-request 不带 :method，
+;;;;                                        默认就是 GET，恰好与 Node 端 app.get(...) 对齐
+;;;;       兄弟模块 sms：GET /sms/sendsms 同样用 auth-secret 头（query 串携带）。
 ;;;;
 ;;;; 主要导出：
 ;;;;   hhub-controller-get-vendor-push-subscription   — JSON 接口：返回当前 vendor 订阅
@@ -25,8 +27,8 @@
 ;;;;   hhub-remove-vendor-push-subscription
 ;;;;   test-webpush-notification-for-vendor / -for-customer  — 调试用：发欢迎通知
 ;;;;   send-webpush-message                            — vendor 收到新订单时被 BL 调用
-;;;;   send-webpush-notification                       — 真正的 drakma POST → /push/notify/user
-;;;;   send-sms-notification                           — 同范式调 /sms/sendsms
+;;;;   send-webpush-notification                       — 真正的 drakma GET → /push/notify/user
+;;;;   send-sms-notification                           — 同范式 GET → /sms/sendsms
 ;;;;   Render JSONView                                 — JSON 序列化
 ;;;;
 ;;;; 关联：
@@ -177,7 +179,7 @@
   "调试工具：给指定 vendor 当前所有订阅各发一条欢迎消息。
    消息：\"Welcome to Nine Stores - <vendor-name>\"。点击跳到 *siteurl*。
    实现：通过 hhub-execute-business-function 取订阅列表，逐条调
-        send-webpush-notification → POST /push/notify/user。"
+        send-webpush-notification → GET /push/notify/user（drakma 默认 GET）。"
   (let* ((title "Nine Stores")
 	 (message (format nil "Welcome to Nine Stores - ~A" (slot-value vendor 'name)))
 	 (clickTarget (format nil "~A" *siteurl*))
@@ -232,11 +234,14 @@
 					;Experiment with push notification
 (defun send-webpush-notification (title message clickTarget endpoint publicKey auth)
 :documentation "Test Webpush Notification.
-   中文：真正发送推送的底层函数——POST 到 *siteurl*/push/notify/user。
-   payload 表单字段：title / message / clickTarget / endpoint / publicKey / auth。
+   中文：真正发送推送的底层函数——drakma:http-request（默认 :method :GET）调用
+   *siteurl*/push/notify/user。
+   query 字段：title / message / clickTarget / endpoint / publicKey / auth
+   （drakma 把 :parameters 编码到 URL query 串里，因为是 GET）。
    请求头：auth-secret = \"highrisehub1234\"（与 webpushserver/ 端共享密钥；推测应改读取
    *HHUBWEBPUSHAUTHSECRET* 环境变量，目前为硬编码）。
-   下游：Nginx → :3333 webpushserver/ → web-push 库 → 浏览器 push service（FCM/AutoPush）。"
+   下游：Nginx → :4345 webpushserver/index-v3.mjs（app.get '/push/notify/user'）
+   → web-push 库（VAPID）→ 浏览器 push service（FCM/Mozilla AutoPush）。"
   (let* ((paramnames (list "title" "message" "clickTarget" "endpoint" "publicKey" "auth"))
 	 (paramvalues (list title message clickTarget endpoint publicKey auth))
 	 (param-alist (pairlis paramnames paramvalues))
@@ -250,10 +255,13 @@
 
 
 (defun send-sms-notification (number senderid message)
-  "把短信发送转给 Node 边车 smsserver/：POST *SITEURL*/sms/sendsms。
-   payload：number / senderid / message。
-   请求头：auth-secret = \"highrisehub1234\"（同 push 共享密钥模式）。
-   备注：放在 webpushnotify 目录但实际属于 sms 通道；下游通过 AWS SNS 发出（印度需注册 SenderID）。"
+  "把短信发送转给 Node 边车 smsserver/：drakma:http-request 默认 :GET 调
+   *SITEURL*/sms/sendsms（与 Node 端 app.get('/sms/sendsms', ...) 对齐）。
+   query 字段：number / senderid / message。
+   请求头：auth-secret = \"highrisehub1234\"（同 push 共享密钥模式；smsserver
+   实际并未校验该 header，但前端按统一范式带上）。
+   备注：放在 webpushnotify 目录但实际属于 sms 通道；smsserver/index-v3.mjs（PM2 :4300）
+   下游通过 AWS SNS 发出 Transactional SMS；印度需经 VI DLT 平台注册 SenderID/TemplateId/EntityId。"
   (let* ((paramnames (list "number" "senderid" "message"))
 	 (paramvalues (list number senderid message))
 	 (param-alist (pairlis paramnames paramvalues))

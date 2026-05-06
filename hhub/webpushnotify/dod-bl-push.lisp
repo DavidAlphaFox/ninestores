@@ -10,12 +10,16 @@
 ;;;;       重复订阅校验（抛 hhub-webpush-subscription-exists）。
 ;;;;
 ;;;;       重要：实际"发送推送"的 HTTP 调用并不在本文件，而是由 dod-ui-push.lisp
-;;;;       通过 drakma POST 到 Node 边车的端点：
-;;;;         POST /push    —— 单订阅一次推送
-;;;;         POST /notify  —— 一次性广播多个订阅
-;;;;         POST /user    —— 按 user/role 维度推送
-;;;;       请求头 X-Auth-Secret （或 auth-secret）携带 *HHUBWEBPUSHAUTHSECRET* 值，
-;;;;       Node 端用同名秘钥校验后才会真正调 web-push 库（VAPID）发出。
+;;;;       的 send-webpush-notification 函数发出。Node 边车 webpushserver/index-v3.mjs
+;;;;       仅暴露以下端点：
+;;;;         GET  /push/status        —— 健康检查
+;;;;         GET  /push/notify/user   —— 唯一发推接口（query 串带 endpoint/publicKey/
+;;;;                                      auth/title/message/clickTarget；header
+;;;;                                      auth-secret 带 *HHUBWEBPUSHAUTHSECRET* 值）
+;;;;         POST /subscribe          —— 浏览器侧前端调用，注册新订阅
+;;;;         POST /unsubscribe        —— 浏览器侧前端调用，注销订阅
+;;;;       Lisp 侧通过 drakma:http-request（默认 :method :GET）调 /push/notify/user，
+;;;;       Node 端校验 auth-secret 后用 web-push 库（VAPID）真正发出。
 ;;;;
 ;;;; 主要导出：
 ;;;;   ProcessCreateRequest / ProcessDeleteRequest / ProcessReadRequest
