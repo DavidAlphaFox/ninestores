@@ -5,10 +5,34 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-;; nst-bl-gstinlookup.lisp
-;; Story 1: GSTIN Auto-Fill via GST Portal Public API
-;; API: https://services.gst.gov.in/services/api/search/taxpayerDetails?gstin=<GSTIN>
-;; Mirrors pattern of getpincodedetails for consistency.
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— GSTIN 查询 —— 通过 GST 门户公共 API 自动填充纳税人详情
+;;;; 分层：BL（业务逻辑层）
+;;;; 文件：hhub/core/nst-bl-gstinlookup.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：封装印度 GST 门户公共 API（https://services.gst.gov.in/services/api/search/taxpayerDetails），
+;;;;       根据用户提供的 15 位 GSTIN 自动查询并返回纳税人法定名称、经营名称、地址、
+;;;;       州、状态、注册日期等结构化信息。支持客户端格式校验（正则），
+;;;;       对 API 异常、网络故障、未注册 GSTIN 返回统一的状态码（:found / :not-found /
+;;;;       :invalid / :api-failure），供 UI 层自动填充或回退到手动录入。
+;;;;       整体设计镜像 getpincodedetails 模式，保持与现有地址查询 API 的一致性。
+;;;;
+;;;; 主要导出：
+;;;;   GSTINDetails              — 轻量领域对象（非完整 BusinessObject），
+;;;;                                 含 gstin / legal-name / trade-name / addr1 /
+;;;;                                 addr2 / city / state / pincode / state-code /
+;;;;                                 status / constitution / registration-date /
+;;;;                                 error-message / lookup-status 等槽位
+;;;;   getgstindetails           — 核心查询函数，调用 GST 门户 API，返回 GSTINDetails
+;;;;   valid-gstin-format-p      — 客户端格式校验（15 位 GSTIN 正则）
+;;;;   build-address-from-pradr  — 从 API 返回的 pradr 嵌套 alist 提取扁平地址
+;;;;   gstin-lookup-to-json    — UI 入口，返回 JSON 字符串供前端自动填充
+;;;;
+;;;; 关联：
+;;;;   上游使用方：vendor 注册 / 发票开具页面中的 GSTIN 自动填充 AJAX 端点
+;;;;   下游依赖：drakma（HTTP 请求）、cl-json（JSON 解析）、cl-ppcre（正则校验）；
+;;;;             *HHUB-GST-TAXPAYER-API-URL* 在 nst-config.lisp 中配置
+;;;; ============================================================================
 (in-package :nstores)
 
 ;; -------------------------------------------------------------------------

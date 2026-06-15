@@ -1,8 +1,29 @@
-;;; nst-bl-glorefcache.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
+;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— 全局引用缓存 —— 线程安全、持久化、带过期时间的层级缓存
+;;;; 分层：BL（业务逻辑层）
+;;;; 文件：hhub/core/nst-bl-glorefcache.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：为 Nine Stores 平台提供全局持久化线程安全缓存基础设施。
+;;;;       支持基于层级 S-表达式键的存储、TTL 过期自动清理、磁盘持久化与恢复，
+;;;;       以及通过 CLOS 方法组合（:around / :before / :after）实现缓存维度管道。
+;;;;       提供 defcached 宏和 with-global-cache 宏，使业务函数零侵入获得缓存能力。
+;;;;
+;;;; 主要导出（:cl-global-cache 包）：
+;;;;   global-cache          — 缓存实例类（线程安全、可命名）
+;;;;   get-entry             — 按层级键读取缓存值（自动检查 TTL 过期）
+;;;;   set-entry             — 按层级键写入缓存值（支持 TTL 秒级过期）
+;;;;   invalidate            — 按前缀批量失效匹配键
+;;;;   persist               — 将缓存数据序列化保存到磁盘文件
+;;;;   restore               — 从磁盘文件反序列化恢复缓存数据
+;;;;   defcached             — 宏：为函数自动包裹缓存逻辑（编译期生成键）
+;;;;   with-global-cache     — 宏：运行时对任意表单包裹缓存逻辑
+;;;;   *default-cache*       — 全局默认缓存实例（单例）
+;;;;
+;;;; 关联：
+;;;;   上游使用方：各业务模块（如订单缓存 *order-cache*）及 vendor 后台函数
+;;;;   下游依赖：bordeaux-threads（锁）、ironclad（SHA1 哈希）、babel（UTF-8 编码）
+;;;; ============================================================================
 
 (defpackage :cl-global-cache
   (:use :cl)
