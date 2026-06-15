@@ -5,29 +5,29 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;; CLASS - DOD-VENDOR-ORDERS
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+;;供应商订单
 (clsql:def-view-class dod-vendor-orders ()
   ((row-id
     :db-kind :key
     :db-constraints :not-null
     :type integer
     :initarg :row-id)
-
+    ;;客户id
    (cust-id
     :type integer
     :initarg :cust-id)
    (customer 
     :accessor get-customer 
     :db-kind :join
-    :db-info (:join-class dod-cust-profile
+    :db-info (:join-class dod-cust-profile ;;客户的详情，通过join连表查询
 			  :home-key cust-id
 			  :foreign-key row-id
 			  :set nil))
-   
+   ;;订单的ID
    (order-id
     :TYPE integer
     :initarg :order-id)
-   
+   ;;订单的详细内容
    (order
     :accessor get-order
     :db-kind :join

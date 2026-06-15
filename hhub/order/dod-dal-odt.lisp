@@ -1,7 +1,7 @@
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 ;;(clsql:file-enable-sql-reader-syntax)
-
+;;订单详细内容
 (clsql:def-view-class dod-order-items ()
   ((row-id
     :db-kind :key
