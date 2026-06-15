@@ -5,10 +5,46 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：paymentgateway 在线支付网关
+;;;; 分层：UI（控制器 + CL-WHO 模板）
+;;;; 文件：hhub/paymentgateway/dod-ui-pay.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：在线支付网关 BasisPay / Traknpay 接入：
+;;;;       - 渲染"发起支付"表单（payment request）：拼出 22 个 hidden 字段并算 sha512 hash，
+;;;;         POST 到 https://pay.basispay.in/v2/paymentrequest 走外部网关。
+;;;;       - 接收 return-url 回调，校验 received-hash == calculated-hash 后落库流水、
+;;;;         更新钱包余额、串接订单提交。
+;;;;       - 失败 / 取消页面占位。
+;;;;
+;;;; 主要导出：
+;;;;   dod-controller-make-payment-request-html  — 完整登录态发起支付（独立页）
+;;;;   make-payment-request-html                 — 渲染表单字符串供其它页面嵌入
+;;;;   dod-controller-customer-payment-successful-page — 支付成功回调
+;;;;   dod-controller-customer-payment-failure-page    — 支付失败回调
+;;;;   dod-controller-customer-payment-cancel-page     — 支付取消回调
+;;;;
+;;;; 关联：
+;;;;   上游使用方：钱包充值 / 订单结算流程
+;;;;   下游依赖：paymentgateway/dod-bl-pay.lisp（落库 create-payment-trans）、
+;;;;             customer 钱包 BL（update-cust-wallet-balance / get-cust-wallet-by-id）、
+;;;;             core 的 generatehashkey / hashcalculate（HMAC-SHA512）、
+;;;;             特殊变量 *PAYGATEWAYRETURNURL* / *PAYGATEWAYCANCELURL* /
+;;;;                       *PAYGATEWAYFAILUREURL* / *current-customer-session*
+;;;; ============================================================================
+
 (in-package :nstores)
 
 
 (defun dod-controller-make-payment-request-html ()
+  "URL 控制器：渲染独立的"发起支付"表单页（要求客户已登录）。
+   核心逻辑：
+   - query 参数：amount、wallet-id、order_id、mode（TEST/LIVE）；
+   - 取 vendor 的 payment-api-key / payment-api-salt 作为网关密钥；
+   - 用 sha512 对全部字段做 hash（generatehashkey），写到 session :payment-hash 留底；
+   - 三个 return-url 都在路径后追加当前会话 cookie，确保网关回调时能识别会话；
+   - 渲染 form action 直指 https://pay.basispay.in/v2/paymentrequest，含 22 个 hidden input。
+   备注：amount 由 GET 参数原样回填，未做服务端二次校验，依赖 hash 防篡改。"
   (let* ((customer (get-login-customer))
 	 (company (get-login-customer-company))
 	 (amount (hunchentoot:parameter "amount"))
@@ -86,6 +122,11 @@
 	
 
 (defun make-payment-request-html (amount wallet-id mode order-id guestemail)
+  "把"发起支付"表单渲染为 HTML 字符串，供其它页面嵌入（如订单结算页）。
+   与 dod-controller-make-payment-request-html 几乎相同，区别：
+   - 入参显式传 amount/wallet-id/mode/order-id/guestemail（而非 query 取）；
+   - GUEST 客户用 guestemail 替代 customer.email；
+   - 用 cl-who:with-html-output-to-string 直接返回字符串而非写入页面流。"
   (let* ((customer (get-login-customer))
 	 (company (get-login-customer-company))
 	 (wallet (if wallet-id (get-cust-wallet-by-id wallet-id company)))
@@ -162,7 +203,18 @@
 
 
 (defun dod-controller-customer-payment-successful-page ()
-  :documentation "This page is called by the Payment Gateway when the payment is successful and the PG redirects to Nine Stores" 
+  :documentation "This page is called by the Payment Gateway when the payment is successful and the PG redirects to Nine Stores.
+   中文：网关支付成功 return-url 回调入口。
+   流程：
+     1. 从 POST 表单读 30+ 字段（transaction_id / payment_method / response_code / amount / udf1=wallet-id 等）；
+     2. 用 vendor.payment-api-salt 对收到的 post 参数（去掉 hash 自身）重新 sha512 生成 calculated-hash；
+     3. 仅当 response_code=0 且 received-hash == calculated-hash 时进入主分支：
+        - create-payment-trans 落库一条 dod-payment-transaction（成功流水）；
+        - STANDARD 客户：update-cust-wallet-balance 给钱包加 amount；
+        - 若 order_id 命中 session 中订单上下文 order-cxt，redirect 到 dodmyorderaddaction
+          完成订单提交；
+        - 否则渲染"支付成功"页（展示 transaction-id / 模式 / 金额 / 钱包新余额）。
+   安全：hash 校验失败、response_code 非 0 时整段无任何副作用，不会写库或加钱包。"
   (let* ((transaction-id (hunchentoot:parameter "transaction_id"))
 	 (company (get-login-customer-company))
 	 (payment-method (hunchentoot:parameter "payment_method"))
@@ -243,9 +295,10 @@
 	
 
 (defun dod-controller-customer-payment-failure-page ()
+  "URL 控制器：网关返回失败的 return-url。已登录客户渲染失败提示，未登录则跳登录页。"
   (if (is-dod-cust-session-valid?)
-      (with-standard-customer-page (:title "Payment Failure! " ) 
-	(:div :class "row" 
+      (with-standard-customer-page (:title "Payment Failure! " )
+	(:div :class "row"
 	      (:div :class "col-xs-12 col-sm-12 col-md-12 col-lg-12"
 		    (:h4 "Payment Failure! Please contact your System Administrator or try after some time."))))
        (hunchentoot:redirect "/hhub/hhubcustloginv2")))
@@ -253,9 +306,10 @@
 
 
 (defun dod-controller-customer-payment-cancel-page ()
+  "URL 控制器：网关返回取消的 return-url。已登录客户渲染取消提示，未登录则跳登录页。"
   (if (is-dod-cust-session-valid?)
-      (with-standard-customer-page (:title "Payment Cancelled! " ) 
-	(:div :class "row" 
+      (with-standard-customer-page (:title "Payment Cancelled! " )
+	(:div :class "row"
 	      (:div :class "col-xs-12 col-sm-12 col-md-12 col-lg-12"
 		    (:h4 "Payment Cancelled."))))
        (hunchentoot:redirect "/hhub/hhubcustloginv2")))

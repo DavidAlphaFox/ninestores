@@ -5,12 +5,38 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— BL 引擎类模板（DDD/六边形服务方法骨架）
+;;;; 分层：BL（业务逻辑层 + 模板代码生成器源）
+;;;; 文件：hhub/core/hhub-bl-egn.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：提供新版 DDD/Hexagonal 风格服务的方法骨架。所有方法 specializer 用
+;;;;       %entity-name% 占位符，槽位 %0%..%37%。代码生成器（dod-bl-utl.lisp 的
+;;;;       create-domain-entity-from-template）会替换占位符生成实际的 nst-bl-<Entity>.lisp。
+;;;;
+;;;; 包含的方法骨架（Adapter / DBService / Service 三类）：
+;;;;   ProcessCreateRequest / ProcessReadRequest / ProcessReadAllRequest /
+;;;;   ProcessUpdateRequest / ProcessDeleteRequest（AdapterService → 调 BusinessService）
+;;;;   doCreate / doRead / doReadAll / doUpdate / doDelete（BusinessService 真正业务）
+;;;;   init（DBAdapterService → 设定 DB 对象与领域对象）
+;;;;   ProcessResponse / ProcessResponseList（领域 → 响应模型）
+;;;;   CreateViewModel / CreateAllViewModel（响应 → 视图模型）
+;;;;   CopyDomainToDB / CopyDBToDomain（领域 ↔ DAO 转换骨架）
+;;;;
+;;;; 警告：本文件含编译禁忌注释 —— 不能直接 compile-file，仅用作模板源。
+;;;;       请在 IDE 中跳过本文件（不要 Ctrl+C Ctrl+K）。
+;;;;
+;;;; 关联：
+;;;;   下游使用方：脚手架生成的 nst-bl-<Entity>.lisp
+;;;;   依赖类：core/hhub-bl-ent.lisp 中的 BusinessService / AdapterService /
+;;;;          DBAdapterService / PresenterService / BusinessObject 等
+;;;; ============================================================================
 (in-package :nstores)
 
-;; METHODS FOR ENTITY CREATE 
+;; METHODS FOR ENTITY CREATE
 ;; This file contains template code which will be used to generate for class methods.
 ;; DO NOT COMPILE THIS FILE USING CTRL + C CTRL + K (OR CTRL + CK)
-;; DO NOT ADD THIS FILE TO COMPILE.LISP FOR MASS COMPILATION. 
+;; DO NOT ADD THIS FILE TO COMPILE.LISP FOR MASS COMPILATION.
 
 
 (defmethod ProcessCreateRequest ((adapter %entity-name%Adapter) (requestmodel %entity-name%RequestModel))

@@ -1,17 +1,45 @@
-;;; hhub-bl-ent.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
-
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— DDD 实体类骨架（BusinessServer / Context / Session / ...）
+;;;; 分层：BL（业务逻辑层 —— 领域基类）
+;;;; 文件：hhub/core/hhub-bl-ent.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：提供 DDD（领域驱动设计）+ Hexagonal Architecture 中的核心 CLOS 类骨架。
+;;;;       新风格代码（warehouse / customer / order / invoice 新接口）都基于这些
+;;;;       基类派生自己的领域对象。
+;;;;
+;;;; 类层级：
+;;;;   BusinessServer（绑定一台硬件/IP 的最顶层抽象）
+;;;;     └─ BusinessContext（业务上下文：vendor / customer / cad / opr 等）
+;;;;          └─ BusinessSession（登录会话）
+;;;;               ├─ VendorSessionObject（卖家专属会话）
+;;;;               └─ UserSessionObject（顾客/超管/CAD 会话）
+;;;;          └─ BusinessObjectRepository（实体仓储）
+;;;;               └─ BusinessObject（领域对象基类）
+;;;;                    ├─ BusinessObjectNIL/Unknown/Contradiction（容错）
+;;;;                    ├─ RequestModel / ResponseModel / ViewModel
+;;;;                    │   及其 NIL / Unknown / Contradiction 子类
+;;;;
+;;;;   服务类：BusinessService / AdapterService / PresenterService /
+;;;;           DBAdapterService（仓储基类）
+;;;;
+;;;;   视图类：View / JSONView / HTMLView / ViewNIL / ViewUnknown / ViewContradiction
+;;;;
+;;;;   通用 generic：init / setCompany / setException / db-save / db-fetch /
+;;;;                db-fetch-all / db-delete / Copy-{BusinessObject-To-DBObject /
+;;;;                DbObject-To-BusinessObject} 等。
+;;;;
+;;;; 关联：
+;;;;   下游使用方：core/hhub-bl-egn.lisp 模板代码 → 各业务模块的 nst-bl-<Entity>.lisp
+;;;;   关联架构：core/nst-bl-conflodis.lisp 的 Context Flow Dispatcher 调度本文件类
+;;;; ============================================================================
 (in-package :nstores)
 
 
-;; Level 1 
+;; Level 1
 ;; A business server is the highest level of business abstraction on the hardware
-;; level as it is tied to a single IP address 
-;; 业务服务器抽象
+;; level as it is tied to a single IP address
+
 (defclass BusinessServer () 
   ((id :reader id
        :initform (format nil "~A" (uuid:make-v1-uuid)))
@@ -39,8 +67,7 @@
 ;; Level 2
 ;; A business context comes after Business server. Inside a business server, there will be multiple
 ;; business contexts. Under each logical business context, several business sessions will
-;; exist.
-;; 业务逻辑上下文
+;; exist. 
 (defclass BusinessContext ()
   ((id :accessor id
        :initform (format nil "~A" (uuid:make-v1-uuid))
@@ -87,7 +114,7 @@
    (uwebsession)))
    
   
-;;每个业务服务器，都会有多个业务对象仓库，每个业务对象仓库内都有多个业务逻辑对象
+
 ;; Level 2
 ;; Under a business server there will  be several business object repositories. Under each
 ;; business object repository, there will be several business objects. 
@@ -101,7 +128,7 @@
     :accessor businessobjects-ht
     :initform (make-hash-table :test 'equal)
     :initarg :businessobjects-ht)))
-;; 业务逻辑对象，每个业务逻辑对象必须要有ID
+
 ;; Level 3
 ;; Each business object will have an ID and several of its own fields/properties/slots. 
 (defclass BusinessObject ()  ;; This is the domain model entity in DDD

@@ -5,6 +5,38 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— Belnap 四值逻辑 + DB 边界宏
+;;;; 分层：BL（业务逻辑层 —— 多值真值系统）
+;;;; 文件：hhub/core/nst-mult-logic.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：实现"真假未知矛盾"四值逻辑（Belnap TCUF：True / False / Unknown / Contradiction，
+;;;;       简写 :T / :F / :U / :C），以及在此基础上的数据库边界宏：
+;;;;       with-db-create / with-db-read-one / with-db-read-all / with-db-update / with-db-delete
+;;;;       —— 把 DB 操作的失败/异常/多值统一封装为 bo-knowledge 实例（含 truth + payload）。
+;;;;
+;;;; 核心常量：
+;;;;   +true+ +false+ +unknown+ +contradiction+   （:T :F :U :C）
+;;;;
+;;;; 核心运算：
+;;;;   knowledge-join              — Belnap 知识序合并（信息单调）
+;;;;   case-truth                  — 按四值分支
+;;;;   merge-payloads              — 合并 payload，冲突返回 (:conflict ...)
+;;;;
+;;;; CRUD 边界宏（与 nst-bl-beltrusys.lisp 的 bo-knowledge 配合）：
+;;;;   with-db-create              — 1 行 = :T，约束违反 = :F，2 行 = :C，error = :U
+;;;;   with-db-read-one            — 单条 = :T；空 = :F；多条 = :C；异常 = :U
+;;;;   with-db-read-all            — 非空 = :T；空 = :F；含重复 PK = :C；异常 = :U
+;;;;   with-db-update / with-db-delete  — affected=1 = :T；0 = :F；>1 = :C；异常 = :U
+;;;;
+;;;; 错误条件：
+;;;;   db-constraint-violation     — 派生此类做"确定 :F"而非"未知 :U"区分
+;;;;
+;;;; 关联：
+;;;;   上游使用方：core/nst-bl-conflodis.lisp 的 dispatch / make-view 流程；
+;;;;               各 nst-bl-<Entity>.lisp 中的 doCreate/doRead/...
+;;;;   下游依赖：nst-bl-beltrusys.lisp（bo-knowledge 包装类）
+;;;; ============================================================================
 (in-package :nstores)
 
 ;;;; nst-bl-crud-macros.lisp

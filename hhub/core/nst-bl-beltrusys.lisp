@@ -5,6 +5,32 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; bo-knowledge.lisp
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— Belief Truth System / 知识封装
+;;;; 分层：BL（业务逻辑层）
+;;;; 文件：hhub/core/nst-bl-beltrusys.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：基于 Belnap 四值逻辑（True / False / Unknown / Contradiction，简写 T/F/U/C）
+;;;;       的"知识对象"封装。把任何 BusinessObject 操作的结果包装成一份带
+;;;;       真值 + 来源（provenance）+ 时间戳的 bo-knowledge 实例，供
+;;;;       Context Flow Dispatcher（nst-bl-conflodis.lisp）按四值挑选 View 渲染。
+;;;;
+;;;; 主要导出：
+;;;;   bo-knowledge                    — 类（truth/payload/provenance/timestamp）
+;;;;   make-bo-knowledge               — 构造器
+;;;;   bo-knowledge-from-boundary      — 由 (TRUTH PAYLOAD SOURCE) 元组转入
+;;;;   bo-known-true-p / -false-p / bo-unknown-p / bo-contradictory-p
+;;;;   bo-safe-payload                 — 仅 :T 时返回 payload，否则 nil
+;;;;   bo-add-provenance / bo-merge-provenance / bo-merge / bo-merge*
+;;;;   bo-knowledge->boundary-result   — 转回元组格式
+;;;;   bo-knowledge-summary            — 调试字符串
+;;;;   with-bo-knowledge-check         — 强制处理四值的宏
+;;;;
+;;;; 关联：
+;;;;   上游使用方：nst-bl-conflodis.lisp 的 dispatch / make-view 流程
+;;;;   下游依赖：nst-mult-logic.lisp 中 +true+/+false+/+unknown+/+contradiction+
+;;;;             以及 knowledge-join、merge-payloads、case-truth 等
+;;;; ============================================================================
 (in-package :nstores)
 
 ;;; BO-KNOWLEDGE: wrapper for a BusinessObject plus TCUF provenance

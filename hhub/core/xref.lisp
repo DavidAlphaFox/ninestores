@@ -1,10 +1,24 @@
-;;; xref.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
-
-;;; -*- Mode: LISP; Package: XREF; Syntax: Common-lisp;  -*- 
+;;; -*- Mode: LISP; Package: XREF; Syntax: Common-lisp;  -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— XREF 静态分析交叉引用工具（第三方代码）
+;;;; 分层：平台基础（开发工具）
+;;;; 文件：hhub/core/xref.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：Mark Kantrowitz 1991 年发布的 List Callers 工具——遍历 Lisp 源文件
+;;;;       构建符号引用数据库（who calls / who references），用于影响分析。
+;;;;       本文件 ~125 KB，原样保留，**不逐函数注释**（属第三方库）。
+;;;;
+;;;; 主要导出（package :xref）：
+;;;;   xref-file / xref-files            — 扫描文件并填充数据库
+;;;;   list-callers / list-callees       — 谁调用、调谁
+;;;;   list-references / list-readers / list-setters / list-users
+;;;;   what-files-call / what-files-set
+;;;;   *xref-info-types*                 — 可追踪的引用种类
+;;;;
+;;;; 关联：
+;;;;   上游使用方：开发期 SLIME 内手动调用；与 nst-bl-funloodat.lisp 同属辅助工具
+;;;;   备注：发布于 1991 年；保留原英文注释，未做汉化。
+;;;; ============================================================================
 ;;; Mon Jan 21 16:21:20 1991 by Mark Kantrowitz <mkant@GLINDA.OZ.CS.CMU.EDU>
 ;;; xref.lisp
 

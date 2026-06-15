@@ -5,10 +5,53 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：invoice 发票 —— 发票头 UI / 控制器（新 nst-* DDD/Hexagonal，特大文件）
+;;;; 分层：UI（控制器 + CL-WHO 模板 + Presenter 装配）
+;;;; 文件：hhub/invoice/nst-ui-ihd.lisp（约 2085 行）
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：本文件是发票头模块的 UI 总入口，覆盖：
+;;;;   - 发票设置（offcanvas 菜单 + 打印/通用/邮件/客户/折扣税/分享 等子设置面板）
+;;;;   - GST 汇总表渲染（render-tax-summary-html）
+;;;;   - 发票列表 / 搜索 / 创建 / 编辑 / 删除 / 状态切换
+;;;;   - 选择客户 → 选择商品 → 组装会话发票 → 确认 → 持久化 全链路
+;;;;   - 发票打印模板渲染（基于 nst-get-cached-invoice-template-func 模板号）
+;;;;   - LiveLink 公开预览 / WhatsApp 分享 / Email 发送
+;;;;
+;;;; 主要导出（按职责块）：
+;;;;   渲染：render-tax-summary-html / render-invoice-settings-menu
+;;;;   设置：com-hhub-transaction-invoice-settings-page + 多个 model/widgets/dialog
+;;;;        invoiceprintsettingswidgethtml 等子部分渲染
+;;;;   列表：com-hhub-transaction-show-InvoiceHeader-page / -search-InvoiceHeader-action
+;;;;   创建链路：com-hhub-transaction-add-customer-to-invoice / -add-products-to-invoice /
+;;;;            -confirm-invoice / -create-InvoiceHeader-action
+;;;;   编辑：com-hhub-transaction-edit-invoice-* / -update-InvoiceHeader-action
+;;;;   状态：com-hhub-transaction-mark-invoice-paid / -cancelled / -refunded / -draft
+;;;;   分享：com-hhub-transaction-send-invoice-* / livelink 控制器
+;;;;
+;;;; 关联：
+;;;;   上游使用方：卖家发票后台路由（多页面 + livesearch + AJAX）
+;;;;   下游依赖：invoice/nst-bl-ihd.lisp、invoice/nst-bl-itm.lisp、nst-ui-itm.lisp、
+;;;;             customer / product BL、core 模板缓存、core PEP 宏
+;;;;
+;;;; 备注：
+;;;;   - 大量 CL-WHO 模板代码 + 表单渲染细节较多。本文件因体量较大（112K，2085 行）
+;;;;     未对每个 widget 函数逐一加 docstring；函数层只为 PEP 控制器和领域装配函数加注释，
+;;;;     纯展示用 widget 仅在节段加 ;; 说明。
+;;;;   - 下文出现的 'invoice tax breakdown'、'session invoice' 等概念见 nst-dal-ihd.lisp 的
+;;;;     SessionInvoice / gst-breakdown 类。
+;;;; ============================================================================
+
 (in-package :nstores)
 
+;; ----------------------------------------------------------------------------
+;; 节段：GST 汇总渲染
+;; ----------------------------------------------------------------------------
+
 (defun render-tax-summary-html (breakdown)
-  "Generates the HTML table for the GST breakdown with a Grand Total row."
+  "Generates the HTML table for the GST breakdown with a Grand Total row.
+   中文：把 gst-breakdown 渲染成 HSN 摘要 HTML 表（含 Grand Total 行）。
+   intra（同州）输出 CGST + SGST 两列；interstate 输出 IGST 一列。"
   (let ((sorted-entries (get-sorted-summary breakdown))
         (interstate (interstate-p breakdown))
         ;; Initialize accumulators for the footer
@@ -68,8 +111,16 @@
 
 
 
-(eval-when (:compile-toplevel :load-toplevel :execute) 
+;; ----------------------------------------------------------------------------
+;; 节段：发票设置（Invoice Settings）—— 包含 offcanvas 菜单 + 打印/通用/邮件/
+;; 客户/折扣税/分享/PDF/安全/高级/通知告警 等子页面的 model/widgets/dialog/render。
+;; 控制器以 com-hhub-transaction-invoice-settings-page 为主入口。
+;; ----------------------------------------------------------------------------
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (defun render-invoice-settings-menu ()
+    "中文：渲染发票设置 offcanvas 侧栏菜单（导航到各子设置页）。
+     eval-when 确保编译期可用（推测：被宏间接引用）。"
     (cl-who:with-html-output (*standard-output* nil :prologue t :indent t)
       (:div :class "offcanvas offcanvas-end" :tabindex"-1" :id "idInvoiceSettingsOffCanvas" :aria-labelledby "idInvoiceSettingsOffCanvasLabel" :style  "background: rgb(222,228,255);
 background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 100%); "
@@ -110,10 +161,13 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun com-hhub-transaction-invoice-settings-page ()
+  "中文：发票设置主页 PEP 入口。会话：with-vend-session-check。"
   (with-vend-session-check
     (with-mvc-ui-page "Invoice Settings Page" #'create-model-for-invoicesettingspage #'create-widgets-for-invoicesettingspage :role :vendor)))
 
 (defun create-model-for-invoicesettingspage ()
+  "中文：设置页 model：从会话读取 :login-vendor-invoice-settings，把 invoice-print-settings 子段
+   交给 invoiceprintsettingswidgethtml 渲染，再用模板 14 包装最终 HTML。"
   (let* ((vinvsettings (hunchentoot:session-value :login-vendor-invoice-settings))
 	 (printsettings (cdr (assoc 'invoice-print-settings vinvsettings :test 'equal)))
 	 (vinvsettingshtml (funcall (nst-get-cached-invoice-template-func :templatenum 14)))
@@ -124,6 +178,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (values idinvsettings vinvsettingshtml)))))
 
 (defun create-widgets-for-invoicesettingspage (modelfunc)
+  "中文：设置页 widgets：用 with-catch-submit-event 包住设置 HTML，捕获子表单提交事件。"
   (multiple-value-bind (idinvsettings vinvsettingshtml) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -134,6 +189,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun invoiceprintsettingswidgethtml (printsettings)
+  "中文：渲染'发票打印设置'子表单：纸张/方向/字号/页边距/页头页脚/水印 + Save 按钮。
+   表单每个字段对应 *invoice-settings* 中 invoice-print-settings 子树的一项。"
   (let ((papersize-ht (make-hash-table :test 'equal))
 	(orientation-ht (make-hash-table :test 'equal))
 	(papersize (cdr (assoc :DEFAULTPAPERSIZE printsettings :test 'equal)))
@@ -237,10 +294,14 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       )))
 
 (defun com-hhub-transaction-save-invoice-print-settings-action ()
+  "中文：保存发票打印设置 PEP 入口。会话：with-vend-session-check。"
   (with-vend-session-check
     (with-mvc-redirect-ui #'create-model-for-invoiceprintsettingsaction #'create-widgets-for-genericredirect)))
 
 (defun create-model-for-invoiceprintsettingsaction ()
+  "中文：保存打印设置 model：解析前端 POST 的 JSON → 处理 logo 文件上传到 S3 →
+   覆盖 *invoice-settings* 中的 invoice-print-settings 子段 → 写到 vendor.invoice-settings 字段
+   （write-to-string 序列化），同步会话变量 :login-vendor-invoice-settings。"
   (let* ((vendor (get-login-vendor))
 	 (vendor-id (get-login-vendor-id))
 	 (tenant-id (get-login-vendor-tenant-id))
@@ -266,14 +327,24 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 
+;; ----------------------------------------------------------------------------
+;; 节段：发票分享 / 下载 / 邮件
+;;   下载 PDF、复制发票（占位）、发送邮件（异步线程）、不同状态的邮件模板
+;;   （DRAFT / PAID / SHIPPED / CANCELLED / REFUNDED / PAYREMINDER / PAYOVERDUEREMINDER）
+;; ----------------------------------------------------------------------------
+
 (defun com-hhub-transaction-copy-invoice ()
+  "中文：复制发票 PEP 入口（占位 —— 函数体为空，未实现）。"
   )
 
 (defun com-hhub-transaction-download-invoice()
+  "中文：发票 PDF 下载 PEP 入口。会话：with-vend-session-check。
+   流程：取会话发票 → 下外部链接 HTML → generatepdf 转 PDF → redirect 到 PDF URL。"
   (with-vend-session-check
     (with-mvc-redirect-ui #'create-model-for-downloadinvoice #'create-widgets-for-genericredirect)))
 
 (defun create-model-for-downloadinvoice ()
+  "中文：下载发票 model：从会话取发票 + external-url → downloadhtmlfile + generatepdf 拼 PDF URL。"
   (let* ((sessioninvkey (hunchentoot:parameter "sessioninvkey"))
 	 (sessioninvoices-ht (hunchentoot:session-value :session-invoices-ht))
 	 (sessioninvoice (gethash sessioninvkey sessioninvoices-ht))
@@ -288,10 +359,13 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun com-hhub-transaction-send-invoice-email ()
+  "中文：发送发票邮件 PEP 入口。会话：with-vend-session-check。"
   (with-vend-session-check
     (with-mvc-redirect-ui #'create-model-for-sendinvoiceemail #'create-widgets-for-genericredirect)))
 
 (defun create-model-for-sendinvoiceemail ()
+  "中文：发送发票邮件 model：取 to/subject/body 后用 sb-thread 异步线程调 hhubsendmail。
+   线程不阻塞主请求，重定向回编辑页。"
   (let* ((sessioninvkey (hunchentoot:parameter "sessioninvkey"))
 	 (to (hunchentoot:parameter "invoiceto"))
 	 (subject (hunchentoot:parameter "draftinvoicesubject"))
@@ -304,10 +378,14 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (values redirecturl)))))
 
 (defun com-hhub-transaction-edit-invoice-email ()
+  "中文：编辑发票邮件 PEP 入口（即'选择模板 + 编辑正文'页）。会话：with-vend-session-check。"
   (with-vend-session-check
     (with-mvc-ui-page "Invoice Email" #'create-model-for-displayinvoiceemail #'create-widgets-for-displayinvoiceemail :role :vendor)))
 
 (defun create-model-for-displayinvoiceemail ()
+  "中文：根据 templatenum 选择不同邮件模板（1=Draft / 2=PayReminder / 3=Overdue / 4=Paid /
+   5=Shipped / 6=Cancelled / 7=Refunded），逐项 regex-replace-all 把发票字段填进模板。
+   返回多值闭包：(invoicetemplate to subject idtextarea charcountid1 sessioninvkey)。"
   (let* ((templatenum (parse-integer (hunchentoot:parameter "templatenum")))
 	 (invoicetemplate (funcall (nst-get-cached-invoice-template-func :templatenum templatenum)))
 	 (company (get-login-vendor-company))
@@ -362,6 +440,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (values invoicetemplate to subject idtextarea charcountid1 sessioninvkey)))))
 
 (defun create-widgets-for-displayinvoiceemail (modelfunc)
+  "中文：发票邮件编辑页 widgets：左右 logo + 表单（收件人 / 主题 / textarea 富文本）+ 'Send' 按钮。"
   (multiple-value-bind (draftemailtext to subject idtextarea charcountid1 sessioninvkey) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
@@ -396,8 +475,18 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 		       (:div  :class "hhub-footer" (hhub-html-page-footer)))))))
     (list widget1))))
 
+;; ----------------------------------------------------------------------------
+;; 节段：LiveLink 公开发票预览（不登录可访问）
+;;   - generate-invoice-ext-url 生成带 base64 编码 (tenant-id, invnum, vendor-id) 的公开 URL
+;;   - displayinvoicepublic 通过 base64 解码后查发票头/行项 → 用 invoicetemplate 模板 13 渲染
+;;   - invoicetemplatefill 把发票字段批量替换到 HTML 模板占位符
+;; ----------------------------------------------------------------------------
+
 (defun generate-invoice-ext-url (invnum vendor company)
-  :description "Generates an external URL for a product, which can be shared with external entities"
+  :description "Generates an external URL for a product, which can be shared with external entities.
+   中文：生成可外部分享的发票 LiveLink。把 (tenant-id, invnum, vendor-id) 三元组编码成 CSV
+   再 base64 拼到 /hhub/displayinvoicepublic?key=... 查询参数，方便客户匿名打开发票预览。
+   description 中说 'product' 系拷贝错（推测）。"
   (let* ((tenant-id (slot-value company 'row-id))
 	 (vendor-id (slot-value vendor 'row-id))
 	 (param-csv (format nil "tenant-id,invnum,vendor-id~C~A,~A,~A" #\linefeed tenant-id invnum vendor-id))
@@ -406,6 +495,13 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun create-model-for-displayinvoicepublic ()
+  "中文：公开发票预览 model：
+     1) 解码 base64 key → (tenant-id, invnum, vendor-id)；
+     2) 查发票头 + 行项 + 生成 GST 汇总；
+     3) generate-invoice-items-rows-public 渲染行项 + render-tax-summary-html 渲染汇总；
+     4) 用模板 13 + invoicetemplatefill 替换占位符；
+     5) 顶部贴 vendor 的 UPI 二维码（generateqrcodeforvendor）。
+   返回：闭包 (values invoicetemplate)。"
   (let* ((invoicetemplate (funcall (nst-get-cached-invoice-template-func :templatenum 13)))  
     	 (parambase64 (hunchentoot:parameter "key"))
 	 (param-csv (cl-base64:base64-string-to-string (hunchentoot:url-decode parambase64)))
@@ -441,6 +537,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (values  invoicetemplate)))))
 
 (defun create-widgets-for-displayinvoicepublic (modelfunc)
+  "中文：公开发票预览 widgets：在顶部加一条虚线分隔后直接输出整段已替换好的发票 HTML。"
   (multiple-value-bind ( invoicetemplate) (funcall modelfunc)
     (let* ((widget1 (function (lambda ()
 		      (cl-who:with-html-output (*standard-output* nil)
@@ -448,7 +545,10 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 			(cl-who:str invoicetemplate))))))
       (list widget1))))
 
-(defun invoicetemplatefill (invoicetemplate invheader invoiceitems invoiceitemshtmlfunc  invoicetaxbreakdownfunc qrcodepath currency vendor) 
+(defun invoicetemplatefill (invoicetemplate invheader invoiceitems invoiceitemshtmlfunc  invoicetaxbreakdownfunc qrcodepath currency vendor)
+  "中文：把发票头/行项/卖家/QR/币种等数据批量 regex-replace-all 到 HTML 模板的 %字段% 占位符。
+   字段总数较多（~30 个），覆盖卖家信息、客户地址、GST 信息、金额合计、TnC、银行账户等。
+   返回：闭包，调用后产出最终 HTML 字符串。"
   (function (lambda ()
     (with-slots (name address gstnumber phone email) vendor
       (setf invoicetemplate (cl-ppcre:regex-replace-all "%Vendor Name%" invoicetemplate name))
@@ -499,10 +599,16 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       
 
 (defun com-hhub-transaction-display-invoice-public ()
+  "中文：公开发票预览主入口（无登录要求 —— 注意没有 with-*-session-check 包裹）。
+   备注：role 仍标 :vendor，但实际无会话校验 —— 推测：依赖 PEP 内部判断或 LiveLink 设计为公开。"
     (with-mvc-ui-page "Display Invoice Public" #'create-model-for-displayinvoicepublic #'create-widgets-for-displayinvoicepublic :role :vendor))
 
 ;;;;;;;;;;;;;;;;;;;;;;;; INVOICE EMAIL OPTIONS MENU ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 节段：发票邮件下拉菜单 —— 根据当前发票状态动态启用/禁用对应模板入口。
 (defun invoice-email-options-menu (status sessioninvkey)
+  "中文：渲染发票邮件下拉菜单。根据 status 启用/禁用具体模板入口：
+   DRAFT → Draft/Proforma；PENDINGPAYMENT → 还款提醒/逾期；PAID → 付款致谢；
+   SHIPPED → 已发货；CANCELLED → 已取消；REFUNDED → 已退款。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "dropdown"  
 	      (:button :id "idinvoiceemailmenu" :class "btn  dropdown-toggle" :type "button" :data-bs-toggle "dropdown" :aria-expanded "false"
@@ -569,7 +675,10 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;; INVOICE ACTION MENU ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 节段：单张发票的快捷动作工具栏（打印/邮件/复制/下载/LiveLink 复制/WhatsApp/删除）
 (defun invoice-header-actions-menu (external-url status sessioninvkey customer)
+  "中文：渲染发票顶栏 12 列工具图标。external-url 存在时显示 'Share LIVE Invoice Link'，
+   否则该位置占位。WhatsApp 通过 createwhatsapplinkwithmessage 跳转。"
   (let ((phone (slot-value customer 'phone)))
     (cl-who:with-html-output (*standard-output* nil)
     (with-html-div-row :style "border-radius: 5px;background-color:#e6f0ff; border-bottom: solid 1px; margin: 15px; padding: 5px; height: 30px; font-size: 1rem;"
@@ -603,7 +712,9 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;ALL INVOICES ACTION MENU ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 节段：发票列表页顶部工具栏（打印 / GSTR1 JSON 导出 / 设置入口）
 (defun invoices-actions-menu (sessioninvkey)
+  "中文：渲染发票列表页顶栏。包含打印 / GSTR1 JSON 导出（占位）/ 设置图标。"
   (cl-who:with-html-output (*standard-output* nil)
     (with-html-div-row :style "border-radius: 5px;background-color:#e6f0ff; border-bottom: solid 1px; margin: 15px; padding: 5px; height: 30px; font-size: 1rem;"
       (with-html-div-col-1 :data-bs-toggle "popover" :title "Print Invoice"
@@ -628,12 +739,17 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 ;;;;;;;;;;;;;;;;;;;;;; INVOICE PAID ACTION ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 节段：标记发票为'已付款'（PAID）—— 触发 InvoiceHeaderStatusRequestModel + 状态切换。
 (defun com-hhub-transaction-invoice-paid-action ()
+  "中文：标记发票已付款 PEP 入口。会话：with-vend-session-check。"
   (with-vend-session-check ;; delete if not needed. 
     (let ((uri (with-mvc-redirect-ui #'create-model-for-invoicepaidaction #'create-widgets-for-genericredirect)))
       (format nil "~A" uri))))
 
 (defun create-model-for-invoicepaidaction ()
+  "中文：发票标记已付款 model：构造 InvoiceHeaderStatusRequestModel（status='PAID' + 总金额 + 大写）→
+   ProcessUpdateRequest 写库 → 同步会话内 sessioninvoice + 库存扣减 →
+   重定向 /hhub/displayinvoices。错误时写日志并抛 hhub-business-function-error。"
   (let* ((company (get-login-vendor-company))
 	 (vendor (get-login-vendor))
 	 (sessioninvkey (hunchentoot:parameter "sessioninvkey"))
@@ -679,6 +795,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	    (error 'hhub-business-function-error :errstring exceptionstr)))))))
 
 (defun updateinvoiceitemsstockinventory (products invoiceitems vendor company)
+  "中文：发票确认/付款时按行项扣减商品库存（粗粒度）。最后 dod-reset-vendor-products-functions 重置缓存。"
   (mapcar (lambda (item)
 	    (let* ((prd-id (slot-value item 'prd-id))
 		   (qty (slot-value item 'qty))
@@ -690,11 +807,15 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;;;;; SHOW THE INVOICE PAYMENT PAGE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 节段：发票流程的"付款收款页"（Step 5）—— 显示二维码 + Finish 按钮。
 (defun com-hhub-transaction-show-invoice-payment-page ()
+  "中文：发票付款页 PEP 入口（Step 5）。会话：with-vend-session-check。"
   (with-vend-session-check ;; delete if not needed. 
     (with-mvc-ui-page "Invoice Payment Page" #'create-model-for-showinvoicepaymentpage #'create-widgets-for-showinvoicepaymentpage :role :vendor )))
 
 (defun create-model-for-showinvoicepaymentpage ()
+  "中文：付款页 model：先把发票状态切为新值 status（推测 PENDINGPAYMENT 或 PAID）→
+   同步会话内 invoiceheader → 返回 (sessioninvkey, totalvalue, invnum)。"
   (let* ((company (get-login-vendor-company))
 	 (sessioninvkey (hunchentoot:parameter "sessioninvkey"))
 	 (status (hunchentoot:parameter "status"))
@@ -735,6 +856,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	    (error 'hhub-business-function-error :errstring exceptionstr)))))))
 
 (defun create-widgets-for-showinvoicepaymentpage (modelfunc)
+  "中文：付款页 widgets：面包屑（5 步流程）+ Print/Previous/Finish 三按钮 + 付款二维码 widget。
+   Finish 表单提交到 vinvoicepaidaction 把状态改为 PAID。"
   (multiple-value-bind (sessioninvkey totalvalue invnum) (funcall modelfunc)
     (let* ((widget1 (function (lambda ()
 		      (with-vendor-breadcrumb
@@ -761,6 +884,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (list widget1 widget2 widget3))))
 
 (defun display-invoice-payment-widget ( amountdue)
+  "中文：渲染付款 widget（基于模板 8）。format 把 amountdue 填入两次 ~A。"
   (let ((filecontent (funcall (nst-get-cached-invoice-template-func :templatenum 8))))
     (setf filecontent (format nil filecontent amountdue amountdue))
     (cl-who:with-html-output (*standard-output* nil)
@@ -770,12 +894,15 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;;;; SHOW THE INVOICE FINAL PAGE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+;; 节段：发票流程"确认 + 完成"页（Step 4 → 创建持久化 / 更新发票头）。
 (defun com-hhub-transaction-show-invoice-confirm-page ()
+  "中文：发票确认页 PEP 入口（Step 4）。展示完整发票模板 + Finish 按钮，提交后写库。"
   (with-vend-session-check ;; delete if not needed. 
     (with-mvc-ui-page "Invoice Confirm Page" #'create-model-for-showinvoiceconfirmpage #'create-widgets-for-showinvoiceconfirmpage :role :vendor )))
 
 (defun remove-invoice-item-markers-from-template (invoicetemplate)
+  "中文：从原始模板中删除 <!--ROW_SNIPPET_BEGIN--> ... <!--ROW_SNIPPET_END--> 子模板，
+   防止 generate-invoice-items-rows 渲染后在原占位重复出现一次。"
   ;; Clean the invoice item markers from original template
   (let* ((row-regex "(?s)<!--ROW_SNIPPET_BEGIN-->(.*?)<!--ROW_SNIPPET_END-->")
          (row-sub-template (cl-ppcre:register-groups-bind (snippet) (row-regex invoicetemplate) snippet)))
@@ -783,6 +910,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
     invoicetemplate))
 
 (defun create-model-for-showinvoiceconfirmpage ()
+  "中文：发票确认页 model：通过 context-id 幂等查找发票头（不存在则取会话中的临时头），
+   渲染完整发票 HTML（行项 + GST 汇总 + UPI 二维码）；返回多值给 widgets 用。"
   (let* ((company (get-login-vendor-company))
 	 (vendor (get-login-vendor))
 	 (sessioninvkey (hunchentoot:parameter "sessioninvkey"))
@@ -826,6 +955,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun create-widgets-for-showinvoiceconfirmpage (modelfunc)
+  "中文：发票确认页 widgets：3 步面包屑 + Previous / NEXT 按钮（NEXT 进入付款页）+ 整段发票模板。"
   (multiple-value-bind (sessioninvkey  invnum  invoicetemplate) (funcall modelfunc)
     (let* ((widget1 (function (lambda ()
 		      (with-vendor-breadcrumb
@@ -852,10 +982,16 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	   (list widget1 widget2 widget3))))
 	
 
+;; ----------------------------------------------------------------------------
+;; 节段：发票金额计算辅助 —— 与 nst-bl-Order.lisp 的 calculate-order-total* 等价。
+;; ----------------------------------------------------------------------------
+
 (defun calculate-invoice-totalbeforetax (invoiceitems)
+  "中文：发票税前合计 = ∑ taxablevalue（fround 取整）。"
   (fround (reduce #'+ (mapcar (lambda (item) (slot-value item 'taxablevalue)) invoiceitems))))
 
 (defun calculate-invoice-totalaftertax (invoiceitems)
+  "中文：发票税后合计 = ∑ (taxablevalue + cgstamt + sgstamt + igstamt)（fround 取整）。"
   (fround (reduce #'+ (mapcar (lambda (item)
 					    (let* ((cgstamt (slot-value item 'cgstamt))
 						   (sgstamt (slot-value item 'sgstamt))
@@ -879,6 +1015,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
     (:cost        . :low)))
 
 (defun calculate-invoice-totalcgst (invoiceitems)
+  "中文：行项 CGST 金额求和。"
  (reduce #'+ (mapcar (lambda (item) (slot-value item 'cgstamt)) invoiceitems)))
 
 (meta calculate-invoice-totalsgst
@@ -895,6 +1032,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
     (:cost        . :low)))
 
 (defun calculate-invoice-totalsgst (invoiceitems)
+  "中文：行项 SGST 金额求和。"
  (reduce #'+ (mapcar (lambda (item) (slot-value item 'sgstamt)) invoiceitems)))
 
 (meta calculate-invoice-totaligst
@@ -911,6 +1049,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
     (:cost        . :low)))
 
 (defun calculate-invoice-totaligst (invoiceitems)
+  "中文：行项 IGST 金额求和。"
   (reduce #'+ (mapcar (lambda (item) (slot-value item 'igstamt)) invoiceitems)))
 
 
@@ -928,6 +1067,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
     (:cost        . :low)))
 
 (defun calculate-invoice-totalgst (invoiceheader invoiceitems)
+  "中文：发票级 GST 总额。比较发票头 placeofsupply 与 statecode：
+   同州 → CGST + SGST 之和；跨州 → 仅 IGST。"
   (let ((placeofsupply (slot-value invoiceheader 'placeofsupply))
 	(statecode (slot-value invoiceheader 'statecode)))
     (if (equal placeofsupply statecode)
@@ -936,6 +1077,9 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	(fround (calculate-invoice-totaligst invoiceitems)))))
 
 (defun display-invoice-confirm-page-widget (invoiceheader invoiceitems qrcodepath sessioninvkey)
+  "中文：CL-WHO 直出的'确认页'发票样式（与外部 HTML 模板 13 是两条并行的渲染路径，
+   推测：保留以兼容老页面）。布局为 13 列 table，含 'TAX INVOICE' 三联式表头、客户信息、行项明细、
+   合计、银行账号、UPI 二维码、印章签名等。"
   (with-slots (row-id invnum invdate customer  custaddr custgstin statecode billaddr shipaddr placeofsupply revcharge transmode vnum totalvalue totalinwords bankaccnum bankifsccode tnc authsign finyear status vendor company) invoiceheader
     (cl-who:with-html-output (*standard-output* nil)
       (:style "table {width: 100%; border-collapse: collapse;} table.center {margin-left: auto; margin-right: auto;} table, th, td {border: 0.5px dashed grey;} th, td { padding: 1px; text-align: left;} td img{ display: block; margin-left: auto; margin-right: auto; } ")
@@ -1045,12 +1189,17 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;;;;;;;;;;;;;;;;;;;; ADD PRODUCT TO CART TO CREATE AN INVOICE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 节段：发票创建流程的 Step 3 —— 选择商品加入'购物车'（会话内 sessioninvitems）。
+;; 含商品搜索（livesearch）、条码扫描入口、'Add To Cart' 弹窗（产品数量编辑）。
 
 (defun com-hhub-transaction-add-product-to-invoice-page ()
-  (with-vend-session-check ;; delete if not needed. 
+  "中文：'选商品到发票'页 PEP 入口（Step 3）。会话：with-vend-session-check。"
+  (with-vend-session-check ;; delete if not needed.
     (with-mvc-ui-page "Add Product To Invoice" #'create-model-for-addprdtoinvoice #'create-widgets-for-addprdtoinvoice :role :vendor )))
 
 (defun create-model-for-addprdtoinvoice ()
+  "中文：'选商品'页 model：从会话取当前编辑的发票（sessioninvoice + 行项 + 商品列表 + 状态）+
+   卖家全部活跃商品。返回多值供 widgets 渲染。"
   (let* ((sessioninvkey (hunchentoot:parameter "sessioninvkey"))
 	 (sessioninvoices-ht (hunchentoot:session-value :session-invoices-ht))
 	 (sessioninvoice (gethash sessioninvkey sessioninvoices-ht))
@@ -1064,6 +1213,9 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (values products sessioninvitems sessioninvproducts  headerstatus sessioninvkey invnum)))))
 
 (defun create-widgets-for-addprdtoinvoice (modelfunc)
+  "中文：'选商品'页 widgets：面包屑 + 商品搜索框（livesearch）+ 条码扫描 input + Checkout 跳转 +
+   购物车表 + 商品列表表。
+   若发票状态已是 PAID/SHIPPED/CANCELLED/REFUNDED 则锁定显示状态文本，禁止增减商品。"
   (multiple-value-bind (products sessioninvitems sessioninvproducts headerstatus sessioninvkey invnum) (funcall modelfunc)
     (let* ((widget1 (function (lambda ()
 		      (cl-who:with-html-output (*standard-output* nil)
@@ -1106,6 +1258,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (list widget1 widget2 widget3))))
 	   
 (defun display-add-product-to-invoice-row (product &rest arguments)
+  "中文：'商品'表格单行渲染。已在购物车里则显示绿色对勾；否则显示 'Add To Cart' 按钮（弹窗调数量）。
+   units-in-stock 为 0 时显示 'Out Of Stock'。"
   (let* ((sessioninvkey (first (first arguments)))
 	 (sessioninvitems (second (first arguments)))
 	 (prd-id (slot-value product 'row-id))
@@ -1144,6 +1298,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 			    (:h5 (:span :class "label label-danger" "Out Of Stock"))))))))))
 
 (defun display-product-in-invoice-row (product &rest arguments)
+  "中文：'购物车'表格单行渲染。已在购物车则显示数量徽章；不在则显示 'Add To Cart' 按钮。"
   (let* ((sessioninvkey (first (first arguments)))
 	 (sessioninvitems (second (first arguments)))
 	 (prd-id (slot-value product 'row-id))
@@ -1186,6 +1341,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun vproduct-qty-add-for-invoice-html (product product-pricing sessioninvkey)
+  "中文：'编辑商品数量'弹窗内容：商品图 / HSN / 价格-折扣 widget / 数量滑块 / Submit 按钮。
+   表单 action='vaddtocartforinvoice'。"
   (let* ((prd-id (slot-value product 'row-id))
 	 (images-str (slot-value product 'prd-image-path))
 	 (imageslst (safe-read-from-string images-str))
@@ -1208,6 +1365,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	    (:input :type "submit"  :class "btn btn-primary" :value "Add To Cart"))))))
 
 (defun com-hhub-transaction-search-product-for-invoice-action ()
+  "中文：商品搜索（在创建发票流程中）livesearch 控制器。会话：with-vend-session-check。
+   按 name LIKE 模糊搜，渲染表格回填 #vendorproductsearchforinvoiceresult。"
   (with-vend-session-check
     (let* ((company (get-login-vendor-company))
 	   (name (hunchentoot:parameter "txtsearchproduct"))
@@ -1226,9 +1385,17 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;; ADD TO CART BY VENDOR FOR INVOICE GENERATION ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+;; 节段：把商品加入购物车（写库 InvoiceItem + 同步会话内 sessioninvoice 各字段）。
 
 (defun create-model-for-vendaddtocartforinvoice ()
+  "中文：添加商品到发票购物车 model：
+     1) 取商品/数量；按 placeofsupply vs statecode 判 intra/inter，重算 GST；
+     2) 通过 ProcessReadRequest 读取发票头（context-id）；
+     3) ProcessCreateRequest 把行项写库；
+     4) add-item-to-tax-breakdown 同步税额聚合；
+     5) wallet 不存在则 create-wallet；
+     6) 把新行项 / 商品 push 到 sessioninvoice，写回会话。
+   返回：闭包 (values redirectlocation)。"
   (let* ((company (get-login-vendor-company))
 	 (prd-id (parse-integer (hunchentoot:parameter "prd-id")))
 	 (prdqty (parse-integer (hunchentoot:parameter "prdqty")))
@@ -1306,7 +1473,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun com-hhub-transaction-vendor-addtocart-for-invoice-action ()
-  :documentation "This function is responsible for adding the product and product quantity to the shopping cart."
+  :documentation "This function is responsible for adding the product and product quantity to the shopping cart.
+   中文：'加入购物车'PEP 入口。会话：with-vend-session-check。"
   (with-vend-session-check
     (with-mvc-redirect-ui #'create-model-for-vendaddtocartforinvoice #'create-widgets-for-genericredirect)))
     
@@ -1317,6 +1485,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;ADD TO CART USING BARCODE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun create-model-for-vendaddtocartusingbarcode ()
+  "中文：条码扫描添加商品 model：按 barcode（'upc' slot）查商品；如已在购物车则数量+1（ProcessUpdateRequest），
+   否则 ProcessCreateRequest 新建行项；GST 与购物车流程同。"
   (let* ((company (get-login-vendor-company))
 	 (barcode (hunchentoot:parameter "barcodeinput"))
 	 (sessioninvkey (hunchentoot:parameter "sessioninvkey"))
@@ -1398,11 +1568,14 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	(values redirectlocation))))))
 
 (defun create-widgets-for-vendaddtocartusingbarcode (modelfunc)
+  "中文：条码扫描添加后通用 redirect widgets。"
  (funcall #'create-widgets-for-genericredirect modelfunc))
 
 
 (defun com-hhub-transaction-vendor-addtocart-using-barcode-action ()
-  :documentation "This function is responsible for adding the product and product quantity to the shopping cart."
+  :documentation "This function is responsible for adding the product and product quantity to the shopping cart.
+   中文：通过扫描条码 UPC/EAN 添加商品到发票购物车的 PEP 入口。
+   备注：会话用了 with-cust-session-check（推测：原作者笔误，应是 with-vend-session-check）。"
   (with-cust-session-check
     (let ((uri (with-mvc-redirect-ui #'create-model-for-vendaddtocartusingbarcode #'create-widgets-for-vendaddtocartusingbarcode)))
       (format nil "~A" uri))))
@@ -1412,11 +1585,19 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 
+;; ----------------------------------------------------------------------------
+;; 节段：发票创建流程的 Step 1 —— 选择客户。
+;;   选已有客户 / 用 GUEST 客户占位 / 弹窗新建客户。
+;; ----------------------------------------------------------------------------
+
 (defun com-hhub-transaction-add-customer-to-invoice-page ()
-  (with-vend-session-check ;; delete if not needed. 
+  "中文：'选客户到发票'页 PEP 入口（Step 1）。会话：with-vend-session-check。"
+  (with-vend-session-check ;; delete if not needed.
     (with-mvc-ui-page "Add Customer To Invoice" #'create-model-for-addcusttoinvoice #'create-widgets-for-addcusttoinvoice :role  :vendor )))
 
 (defun create-model-for-addcusttoinvoice()
+  "中文：'选客户到发票'页 model：取 GUEST 占位客户 + 卖家自有客户列表。
+   返回多值供 widgets 渲染。"
   (let* ((company (get-login-vendor-company))
 	 (vendor (get-login-vendor))
 	 (guestcustomer (select-guest-customer company))
@@ -1426,6 +1607,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (values mycustomers guestcustid)))))
 
 (defun create-widgets-for-addcusttoinvoice (modelfunc)
+  "中文：'选客户'页 widgets：面包屑 + 'Add Customer' 弹窗按钮 + 'NEXT (用 GUEST)' 按钮 +
+   按姓名/手机搜索框（双 livesearch）+ 客户列表表格。"
   (multiple-value-bind (mycustomers guestcustid) (funcall modelfunc)
     (let* ((widget1 (function (lambda ()
 		      (cl-who:with-html-output (*standard-output* nil)
@@ -1457,6 +1640,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (list widget1 widget2))))
 
 (defun display-add-customer-to-invoice-row (customer &rest arguments)
+  "中文：客户表格单行渲染：姓名 / 手机 / 'Create Invoice' 按钮（直接跳到 Step 2 编辑发票）。"
   (declare (ignore arguments))
   (let* ((cust-id (slot-value customer 'row-id))
 	 (cust-phone (slot-value customer 'phone))
@@ -1476,8 +1660,13 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	 
 
 
+;; ----------------------------------------------------------------------------
+;; 节段：发票头列表 / 搜索 / 编辑 / 创建（卖家发票后台主入口集合）
+;; ----------------------------------------------------------------------------
+
 (defun InvoiceHeader-search-html ()
-  :description "This will create a html search box widget"
+  :description "This will create a html search box widget.
+   中文：渲染发票号搜索框（livesearch + 3 字符触发）。结果渲染到 #InvoiceHeaderlivesearchresult。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "row"
 	  (:div :id "custom-search-input" :class "col-3"
@@ -1485,12 +1674,15 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 		  (submitsearchform1event-js "#idInvoiceHeaderlivesearch" "#InvoiceHeaderlivesearchresult"))))))
 
 (defun com-hhub-transaction-show-invoices-page ()
-  :description "This is a show list page for all the InvoiceHeader entities"
+  :description "This is a show list page for all the InvoiceHeader entities.
+   中文：发票总览页 PEP 入口（卖家后台首页）。会话：with-vend-session-check。"
   (with-vend-session-check ;; delete if not needed. 
     (with-mvc-ui-page "InvoiceHeader" #'create-model-for-showInvoiceHeader #'create-widgets-for-showInvoiceHeader :role  :vendor )))
 
 (defun create-model-for-showInvoiceHeader ()
-  :description "This is a model function which will create a model to show InvoiceHeader entities"
+  :description "This is a model function which will create a model to show InvoiceHeader entities.
+   中文：发票总览 model：构造 RequestModel/Adapter/Presenter，processreadallrequest 取本卖家全部发票头 →
+   CreateAllViewModel；with-hhub-transaction PEP 鉴权。"
   (let* ((company (get-login-vendor-company))
 	 (vendor (get-login-vendor))
 	 (presenterobj (make-instance 'InvoiceHeaderPresenter))
@@ -1511,7 +1703,9 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	(values viewallmodel htmlview))))))
 
 (defun create-widgets-for-showInvoiceHeader (modelfunc)
- :description "This is the view/widget function for show InvoiceHeader entities" 
+ :description "This is the view/widget function for show InvoiceHeader entities.
+   中文：发票总览页 widgets：面包屑 + 搜索框 + 顶栏工具菜单 + 'Create Invoice' 按钮 + 列表 +
+   发票设置 offcanvas。"
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -1536,17 +1730,20 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (list widget1 widget2 widget3 widget4))))
 
 (defun create-widgets-for-updateInvoiceHeader (modelfunc)
-:description "This is a widgets function for update InvoiceHeader entity"      
+:description "This is a widgets function for update InvoiceHeader entity.
+   中文：更新发票后通用 redirect widgets。"
   (funcall #'create-widgets-for-genericredirect modelfunc))
 
 
 (defmethod RenderListViewHTML ((htmlview InvoiceHeaderHTMLView) viewmodellist)
-  :description "This is a HTML View rendering function for InvoiceHeader entities, which will display each InvoiceHeader entity in a row"
+  :description "This is a HTML View rendering function for InvoiceHeader entities, which will display each InvoiceHeader entity in a row.
+   中文：发票头表格渲染：发票号 / 日期 / 客户名 / 状态 / 金额 / 操作 6 列。"
   (when viewmodellist
     (display-as-table (list "Invoice Number" "Date" "Customer Name" "Status" "Total Value" "Action") viewmodellist 'display-InvoiceHeader-row)))
 
 (defun create-model-for-searchInvoiceHeader ()
-  :description "This is a model function for search InvoiceHeader entities/entity" 
+  :description "This is a model function for search InvoiceHeader entities/entity.
+   中文：发票号搜索 model：把 livesearch 文本作为 :invnum 装到 InvoiceHeaderSearchRequestModel。"
   (let* ((search-clause (hunchentoot:parameter "InvoiceHeaderlivesearch"))
 	 (vendor (get-login-vendor))
 	 (company (get-login-vendor-company))
@@ -1569,7 +1766,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	(values viewallmodel htmlview))))))
 
 (defun create-widgets-for-searchInvoiceHeader (modelfunc)
-  :description "This is a widget function for search InvoiceHeader entities"
+  :description "This is a widget function for search InvoiceHeader entities.
+   中文：搜索结果 widgets：'Create Invoice' 按钮 + 搜索结果数 + 列表表格。"
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
@@ -1584,13 +1782,17 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       (list widget1))))
 
 (defun com-hhub-transaction-search-invoice-action ()
-  :description "This is a MVC function to search action for InvoiceHeader entities/entity" 
+  :description "This is a MVC function to search action for InvoiceHeader entities/entity.
+   中文：发票搜索动作：调 model + widgets，display-search-results-with-widgets 渲染输出。"
   (let* ((modelfunc (funcall #'create-model-for-searchInvoiceHeader))
 	 (widgets (funcall #'create-widgets-for-searchInvoiceHeader modelfunc)))
     (display-search-results-with-widgets widgets)))
 
 (defun create-model-for-updateInvoiceHeader ()
-  :description "This is a model function for update InvoiceHeader entity"
+  :description "This is a model function for update InvoiceHeader entity.
+   中文：发票头更新 model：从 hunchentoot 取所有字段（含 totalvalue 解析为浮点），
+   生成 external-url（LiveLink），调 ProcessUpdateRequest。错误时写日志并抛 hhub-business-function-error。
+   重定向到 /hhub/vproductsforinvoicepage?sessioninvkey=<invnum>。"
   (let* ((invnum (hunchentoot:parameter "invnum"))
 	 (invdate (get-date-from-string (hunchentoot:parameter "invdate")))
 	 (custid (hunchentoot:parameter "custid"))
@@ -1675,17 +1877,22 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 		 
 
 (defun com-hhub-transaction-create-invoice-action()
-  :description "This is a MVC function for create InvoiceHeader entity"
+  :description "This is a MVC function for create InvoiceHeader entity.
+   中文：发票创建动作 PEP 入口（即'编辑发票头'页表单提交后）。会话：with-vend-session-check。"
   (with-vend-session-check ;; delete if not needed. 
     (let ((url (with-mvc-redirect-ui  #'create-model-for-createInvoiceHeader #'create-widgets-for-createInvoiceHeader)))
       (format nil "~A" url))))
 
 (defun create-widgets-for-createInvoiceHeader (modelfunc)
-  :description "This is a create widget function for InvoiceHeader entity"
+  :description "This is a create widget function for InvoiceHeader entity.
+   中文：创建发票后通用 redirect widgets。"
   (funcall #'create-widgets-for-genericredirect modelfunc))
 
 (defun create-model-for-createInvoiceHeader ()
-  :description "This is a create model function for creating a InvoiceHeader entity"
+  :description "This is a create model function for creating a InvoiceHeader entity.
+   中文：发票创建 model：从 hunchentoot 取所有字段构造 RequestModel → ProcessCreateRequest 写库 →
+   立即 ProcessReadRequest（按 context-id）回读以拿到 row-id 与 invnum → 写入会话 sessioninvoice。
+   重定向到 Step 3 的商品选择页。错误时写日志并抛 hhub-business-function-error。"
   (let* ((invdate (get-date-from-string (hunchentoot:parameter "invdate")))
 	 (company (get-login-vendor-company))
 	 (sessioninvkey (hunchentoot:parameter "sessioninvkey"))
@@ -1779,7 +1986,9 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun com-hhub-transaction-create-InvoiceHeader-dialog (&optional domainobj)
-  :description "This function creates a dialog to create InvoiceHeader entity"
+  :description "This function creates a dialog to create InvoiceHeader entity.
+   中文：创建/编辑发票头的弹窗表单。每个字段一个 input，invnum 为 readonly。
+   action：无 domainobj 时 'createinvoiceaction'，否则 'updateinvoiceaction'。"
   (let* ((invnum  (if domainobj (slot-value domainobj 'invnum)))
 	 (invdate  (if domainobj (get-date-string (slot-value domainobj 'invdate))))
 	 (custaddr  (if domainobj (slot-value domainobj 'custaddr)))
@@ -1844,7 +2053,9 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun vendor-create-update-customer-dialog (&optional customer)
-  :description "This function creates a dialog to create InvoiceHeader entity"
+  :description "This function creates a dialog to create InvoiceHeader entity.
+   中文：卖家创建/更新客户的弹窗表单（在发票流程中按需创建客户）。
+   description 系拷贝自 InvoiceHeader 模板（推测）。"
   (let* ((firstname (when customer (slot-value customer 'firstname)))
 	 (lastname (when customer (slot-value customer 'lastname)))
 	 (phone (when customer (slot-value customer 'phone )))
@@ -1862,10 +2073,15 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 		    
 
 (defun com-hhub-transaction-vendor-create-customer-action ()
+  "中文：卖家创建/更新客户的 PEP 入口（在发票流程中按需创建）。会话：with-vend-session-check。"
   (with-vend-session-check
     (with-mvc-redirect-ui #'create-model-for-vendorcreatecustomer #'create-widgets-for-vendorcreatecustomer)))
 
 (defun create-model-for-vendorcreatecustomer ()
+  "中文：创建/更新客户 model：
+     - 按 phone 查客户，存在则更新字段；不存在则随机生成密码 + 盐 + 加密 → create-customer →
+       create-wallet（卖家维度的钱包）。
+   返回：闭包重定向到 /hhub/addcusttoinvoice 让卖家在选客户后继续创建发票。"
   (let* ((vendor (get-login-vendor))
 	 (fname (hunchentoot:parameter "firstname"))
 	 (lname (hunchentoot:parameter "lastname"))
@@ -1900,10 +2116,12 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
       redirectlocation))))
       
 (defun create-widgets-for-vendorcreatecustomer (modelfunc)
-  :description "This is a widgets function for create/update customer by vendor"      
+  :description "This is a widgets function for create/update customer by vendor.
+   中文：创建客户后通用 redirect widgets。"
   (funcall #'create-widgets-for-genericredirect modelfunc))
   
 (defun display-InvoiceHeader-row (viewmodel &rest arguments)
+  "中文：发票头列表单行渲染：发票号 / 日期 / 客户名 / 状态 / 总额 / Edit 链接。"
   (declare (ignore arguments ))
   (with-slots (invnum invdate customer status totalvalue) viewmodel
     (cl-who:with-html-output (*standard-output* nil)
@@ -1918,20 +2136,28 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun com-hhub-transaction-update-invoice-action()
-  :description "This is the MVC function to update action for InvoiceHeader entity"
+  :description "This is the MVC function to update action for InvoiceHeader entity.
+   中文：发票头更新动作 PEP 入口。会话：with-vend-session-check。"
   (with-vend-session-check ;; delete if not needed. 
     (let ((url (with-mvc-redirect-ui  #'create-model-for-updateInvoiceHeader #'create-widgets-for-updateInvoiceHeader)))
       (format nil "~A" url))))
 
 
 (defun com-hhub-transaction-edit-invoice-header-page()
-  :description "This is the MVC function to show invoice header page"
+  :description "This is the MVC function to show invoice header page.
+   中文：编辑发票头页 PEP 入口（Step 2：填写发票头）。会话：with-vend-session-check。"
   (with-vend-session-check ;; delete if not needed. 
     (with-mvc-ui-page "Edit Invoice" #'create-model-for-editinvoiceheaderpage #'create-widgets-for-editinvoiceheaderpage :role :vendor)))
 
 
 
 (defun create-model-for-editinvoiceheaderpage ()
+  "中文：编辑/新建发票头 model：
+     1) 模式判断：若有 invnum → 走读取流程；否则构造空 InvoiceHeader（带 UUID context-id +
+        默认 status=DRAFT、placeofsupply/statecode 取系统默认州、tnc/authsign 默认值）；
+     2) 同步获取行项列表；
+     3) 生成新的 SessionInvoice（含 customer / 行项 / GST 汇总）写入 hunchentoot 会话。
+     sessioninvkey 在新建时为 NST000xxxxxx 随机串，编辑时复用 invnum。"
   (let* ((company (get-login-vendor-company))
 	 (vendor (get-login-vendor))
 	 (custid (hunchentoot:parameter "custid"))
@@ -1986,6 +2212,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun create-widgets-for-editinvoiceheaderpage (modelfunc)
+  "中文：编辑发票头页 widgets：4 列 panel 拼接 + 顶部动作菜单 + 提交表单（create/update 切换）。
+   备注：widget5 在 let* 中赋值两次（第二次覆盖第一次）—— 推测：模板演化期间残留。"
   (multiple-value-bind (context-id invnum invdate custaddr custgstin statecode billaddr shipaddr placeofsupply revcharge transmode vnum totalvalue totalinwords bankaccnum bankifsccode tnc authsign finyear external-url status customer  mode sessioninvkey) (funcall modelfunc)
     (let* ((widget1 (editinvoicewidget-section1 sessioninvkey context-id invnum invdate  custgstin finyear status customer))
 	   (widget2 (editinvoicewidget-section2 custaddr billaddr shipaddr))
@@ -2016,6 +2244,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 
 
 (defun editinvoicewidget-section1 (sessioninvkey context-id invnum invdate  custgstin finyear status customer)
+  "中文：编辑发票头页 第 1 列：财年下拉 / 状态下拉（DRAFT/PENDINGPAYMENT/PAID/SHIPPED/CANCELLED/REFUNDED）/
+   发票号（只读）/ 发票日（jQuery datepicker）/ 客户 GST 编号。底部嵌入 datepicker JS。"
   (function (lambda ()
     (let ((charcountid1 (format nil "idchcount~A" (hhub-random-password 3)))
 	  (idinvoicedate (format nil "idinvoicedate~A" (gensym)))
@@ -2063,6 +2293,7 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 );" idinvoicedate))))))))
 
 (defun editinvoicewidget-section2 (custaddr billaddr shipaddr)
+  "中文：编辑发票头页 第 2 列：客户地址 / 账单地址 / 收货地址 三个 textarea（200 字符限制 + 字数统计）。"
   (function (lambda ()
     (let ((charcountid1 (format nil "idchcount~A" (hhub-random-password 3)))
 	  (charcountid2 (format nil "idchcount~A" (hhub-random-password 3)))
@@ -2083,6 +2314,9 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
   
 
 (defun editinvoicewidget-section3 (statecode placeofsupply revcharge transmode vnum totalvalue totalinwords)
+  "中文：编辑发票头页 第 3 列：州 / 供应地（GST_STATECODES_HT 下拉）/ 反向计税 Yes/No /
+   运输方式 NA/Road/Rail/Air/Ship / 车辆号 / Total（隐藏字段）/ 大写金额（隐藏字段）。
+   placeofsupply-ht 在函数内构造但未使用 —— 推测：早期实现遗留。"
   (function (lambda ()
     (let ((revcharge-ht (make-hash-table :test 'equal))
 	  (transmode-ht (make-hash-table :test 'equal))
@@ -2125,6 +2359,8 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 	      (:input :class "form-control" :type "text" :value totalinwords :placeholder "Total In Words"  :name "totalinwords" )))))))
 
 (defun editinvoicewidget-section4 (bankaccnum bankifsccode tnc authsign)
+  "中文：编辑发票头页 第 4 列：'NEXT' 提交按钮 / 银行账号 / IFSC / 发票条款（textarea 1000 字符）/
+   授权签章。"
   (function (lambda ()
     (let ((charcountid1 (format nil "idchcount~A" (hhub-random-password 3))))
       (cl-who:with-html-output (*standard-output* nil)

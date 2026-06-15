@@ -5,6 +5,37 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— UI 工具与 PEP/页面模板宏
+;;;; 分层：UI 控制器/视图层
+;;;; 文件：hhub/core/dod-ui-utl.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：UI 层最重要的工具集合，含三大类：
+;;;;   1) 简易 MVC 框架（Page/Component/Widget）+ with-mvc-ui-page 宏
+;;;;   2) PEP（策略执行点）：with-hhub-transaction / with-hhub-pep 宏；
+;;;;      会话校验：with-cust-session-check / with-vend-session-check /
+;;;;      with-opr-session-check / with-cad-session-check（架构 6.1/6.2 节）
+;;;;   3) 一系列 cl-who 包装宏：with-standard-{customer,vendor,admin,compadmin}-page,
+;;;;      with-html-form / with-html-input-* / modal-dialog / with-html-card /
+;;;;      with-html-table / with-html-div-col-* 等。
+;;;;   附带 SMTP 邮件、日志/线程辅助、JS 错误对话框、模板助手。
+;;;;
+;;;; 主要导出（按重要性挑选）：
+;;;;   with-hhub-transaction              — PEP 入口宏（被所有受保护控制器包裹）
+;;;;   with-hhub-pep                      — XACML 风格 PEP（旧版，少用）
+;;;;   with-cust-session-check / -vend- / -opr- / -cad-   — 会话/认证守卫
+;;;;   with-mvc-ui-page                   — 主流页面渲染入口
+;;;;   with-standard-{customer,vendor,admin,compadmin}-page-v2/v3 — 各 persona 页面模板
+;;;;   nst-generic-login-with-password    — 通用登录处理
+;;;;   hhubsendmail / hhubsendmail-test   — SMTP 发邮件
+;;;;   logIamhere                         — 日志助手
+;;;;   modal-dialog / modal-dialog-v2     — Bootstrap 模态框
+;;;;   with-html-form / with-html-input-* — 表单元素
+;;;;
+;;;; 关联：
+;;;;   上游使用方：所有 dod-controller-* / com-hhub-transaction-* 控制器
+;;;;   下游依赖：core/dod-bl-bo.lisp（has-permission PDP）、cl-who、Hunchentoot session
+;;;; ============================================================================
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
@@ -51,7 +82,15 @@ Returns a list of widget outputs."
 ;;;;;;;;;;;;;;;;;;;; Simple UI Framework ends here ;;;;;;;;;;;;;;;;;;;;
 
 (defun nst-generic-login-with-password (persona formaction redirectonfailure)
-  (handler-case 
+  "通用登录页（密码 + 后续 OTP 流程）。
+   参数：persona — 角色字符串（Customer / Vendor / Operator / CAD）；
+         formaction — 表单提交目标 URL；
+         redirectonfailure — 已登录时的重定向地址。
+   行为：
+     - 先 ping DB（select 1）确认连接活着；
+     - 失败时尝试 (stop-das) + (start-das) 自我恢复并 redirect 重登；
+     - 渲染 with-html-card 形式的登录卡片。"
+  (handler-case
       (progn  
 	(if (equal (caar (clsql:query "select 1" :flatp nil :field-names nil :database *dod-db-instance*)) 1) T)      
 	(if (is-dod-session-valid?)
@@ -360,6 +399,7 @@ Returns a list of widget outputs."
 
 
 (defun logIamhere (where)
+  "把字符串 where（连同时间戳）追加到业务函数日志文件。开发期常用的'打点'。"
   (when *dod-debug-mode*
     (hunchentoot:log-message* :info (format nil "~A" where))))
 
@@ -431,6 +471,7 @@ Returns a list of widget outputs."
 
 
 (defun hhubsendmail (to subject body &optional (from *HHUBSMTPSENDER*) attachments-list)
+  "通过 cl-smtp 发邮件。to 可以是字符串或列表；attachments-list 用于带附件邮件。"
   (let ((username *HHUBSMTPUSERNAME*) 
 	(password  *HHUBSMTPPASSWORD*))  
     
@@ -779,31 +820,44 @@ Returns a list of widget outputs."
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-cust-session-check (&body body)
-    `(if hunchentoot:*session* ,@body 
+    "客户会话守卫：未登录则 redirect 到 *HHUBCUSTLOGINPAGEURL*。
+     展开为简单的 if 检查；与 with-hhub-transaction 配合（先认证后授权）。"
+    `(if hunchentoot:*session* ,@body
 					;else 
 	 (hunchentoot:redirect *HHUBCUSTLOGINPAGEURL*))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-vend-session-check (&body body)
-    `(if hunchentoot:*session* ,@body 
+    "卖家会话守卫：未登录则 redirect 到 *HHUBVENDLOGINPAGEURL*。"
+    `(if hunchentoot:*session* ,@body
 					;else 
 	 (hunchentoot:redirect *HHUBVENDLOGINPAGEURL*))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-opr-session-check (&body body)
-    `(if (and (verify-superadmin)  hunchentoot:*session*) ,@body 
+    "运营/超管会话守卫：必须登录 *AND* (verify-superadmin) 通过；否则 redirect 登录页。
+     PAP 后台控制器都用这个宏保护。"
+    `(if (and (verify-superadmin)  hunchentoot:*session*) ,@body
 					;else 
 	 (hunchentoot:redirect *HHUBOPRLOGINPAGEURL*))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-cad-session-check (&body body)
-    `(if hunchentoot:*session* ,@body 
+    "Company Admin 会话守卫：未登录则 redirect 到 *HHUBCADLOGINPAGEURL*。"
+    `(if hunchentoot:*session* ,@body
 					;else 
 	 (hunchentoot:redirect *HHUBCADLOGINPAGEURL*))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-hhub-transaction (name &optional params  &body body)
-    :documentation "This is the Policy Enforcement Point for Nine Stores" 
+    :documentation "This is the Policy Enforcement Point for Nine Stores
+    中文：ABAC 框架的 PEP（策略执行点）。
+    展开形态：
+      1) 用 name（事务函数名字符串）从 cached-transactions-ht 找出 dod-bus-transaction；
+      2) uri-prefix-boundary-p 校验请求 URI 与 transaction-uri 的前缀+边界匹配；
+      3) (has-permission transaction params) 委托给 PDP 做策略求值；
+      4) 通过且 URI 匹配 → 执行 ,@body；否则记日志并 redirect /hhub/permissiondenied。
+    见 architecture.md 第 6.2 节；name 应当与 com-hhub-transaction-* 同名。"
     `(let* ((transaction (get-ht-val ,name (hhub-get-cached-transactions-ht)))
 	    (transaction-uri (slot-value transaction 'uri))
 	    (uri (cdr (assoc "uri" params :test 'equal)))
@@ -835,6 +889,9 @@ Returns a list of widget outputs."
 ; Policy Enforcement Point for HHUB
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-hhub-pep (name subject resource action env &body body)
+    "XACML 风格 PEP（subject/resource/action/env 四元组）。
+     早期实现，主流路径已切到 with-hhub-transaction；保留兼容。
+     调 has-permission1（按 policy-id 查策略后 funcall）。"
     `(let* ((transaction (select-bus-trans-by-trans-func ,name))
 	    (policy-id (slot-value transaction 'auth-policy-id)))
        (if (has-permission1 policy-id ,subject ,resource ,action ,env) 
@@ -888,6 +945,10 @@ individual tiles. It also supports search functionality by including the searchr
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-mvc-ui-page (pagetitle createmodelfunc createwidgetsfunc &key role)
+    "MVC 风格页面渲染入口宏。
+     展开形态：先 funcall createmodelfunc 拿到 modelfunc → 再 funcall createwidgetsfunc 拿 widgets →
+     按 role（:customer / :vendor / :compadmin / :superadmin / :search）分发到对应 display-*-page-with-widgets。
+     是大量 dod-controller-* 的标准外壳。"
     `(let* ((modelfunc (funcall ,createmodelfunc))
 	    (widgets (funcall ,createwidgetsfunc modelfunc)))
        (case ,role

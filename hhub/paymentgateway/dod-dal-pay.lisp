@@ -5,10 +5,48 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：paymentgateway 在线支付网关
+;;;; 分层：DAL（数据访问层）
+;;;; 文件：hhub/paymentgateway/dod-dal-pay.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义在线支付交易记录实体 dod-payment-transaction，映射到 MySQL 表
+;;;;       DOD_PAYMENT_TRANSACTION。一笔订单在外部网关（如 PayU/Razorpay）
+;;;;       发起支付时，本表记录其请求/回调结果（金额、币种、网关 transaction-id、
+;;;;       响应码与错误描述）。
+;;;;
+;;;; 主要导出：
+;;;;   dod-payment-transaction   — 支付交易 view-class
+;;;;
+;;;; 关联：
+;;;;   上游使用方：paymentgateway/dod-bl-pay.lisp（BL 持久化）、
+;;;;               paymentgateway/dod-ui-pay.lisp（结算页 / 网关回调控制器）
+;;;;   下游依赖：dod-order / dod-cust-profile / dod-vend-profile / dod-company
+;;;; ============================================================================
+
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-payment-transaction
+;; 表：DOD_PAYMENT_TRANSACTION
+;; 含义：在线支付网关交易日志。一行记录一次支付尝试（不论成功失败）。
+;; 关键字段：
+;;   row-id            主键
+;;   order-id          关联订单（注：声明类型为 string 30，按字符串外键 → dod-order.row-id）
+;;   amt / currency    交易金额与币种（如 INR）
+;;   description       展示给网关的交易摘要
+;;   customer-id       下单客户 → dod-cust-profile.row-id
+;;   vendor-id         所属卖家 → dod-vend-profile.row-id
+;;   payment-mode      支付方式标识（如 CARD / NB / UPI 等，由网关返回）
+;;   transaction-id    网关侧返回的支付流水号
+;;   response-code     网关响应码
+;;   response-message  网关响应文本
+;;   error-desc        失败原因描述（成功时为空）
+;;   tenant-id         多租户隔离键 → dod-company.row-id
+;;   deleted-state     N/Y 软删标志
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-payment-transaction ()
   ((row-id
     :db-kind :key

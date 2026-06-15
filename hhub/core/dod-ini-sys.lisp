@@ -5,11 +5,45 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— 系统初始化与全局配置
+;;;; 分层：平台基础（启动 / 引导）
+;;;; 文件：hhub/core/dod-ini-sys.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：集中所有平台级 defvar/defparameter（DB 连接、URL、模板路径、ABAC 前缀、
+;;;;       支付网关 URL、登录超时、套餐期限、文件路径等），以及 (start-das) /
+;;;;       (stop-das) —— Hunchentoot HTTP 服务的启动/停机入口、
+;;;;       缓存预热（hhub-gen-globally-cached-lists-functions）、
+;;;;       业务服务器/会话/Actor 初始化、模板加载（核心/发票/订单/客户/邮件/产品）。
+;;;;
+;;;; 主要导出（按重要性挑选）：
+;;;;   start-das / stop-das                 — HTTP 服务启停（详见 docs/architecture.md 第 5 节）
+;;;;   crm-db-connect                       — CLSQL MySQL 连接
+;;;;   hhub-gen-globally-cached-lists-functions — 一次性预热 ABAC 6 张表的闭包列表
+;;;;   hhub-get-cached-auth-policies / -roles / -transactions / ...
+;;;;   hhub-get-cached-auth-policies-ht / -transactions-ht  — PEP/PDP 用的 hash table
+;;;;   nst-load-{core,invoice,product,order,customer,email}-templates
+;;;;   initBusinessServer / deleteBusinessServer            — DDD 业务服务器单例
+;;;;   各类全局参数（DB / URL / 资源 / 限额 / OTP / 钱包等）
+;;;;
+;;;; 重要全局：
+;;;;   *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*    — ABAC 缓存（6 闭包槽位）
+;;;;   *HHUBBUSINESSSERVER*                  — DDD 业务服务器单例
+;;;;   *NSTSENDORDEREMAILACTOR* / *NSTAWSS3FILEUPLOADACTOR*  — 常驻 actor
+;;;;   *ABAC-{ATTRIBUTE,POLICY,TRANSACTION}-{NAME,FUNC}-PREFIX*
+;;;;
+;;;; 关联：
+;;;;   上游使用方：startup/load.lisp → (start-das)；运维脚本调 (stop-das)
+;;;;   下游依赖：几乎所有 core/* 模块；hunchentoot；clsql；webpush/sms/upload actors
+;;;; ============================================================================
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 
 ;; You must set these variables to appropriate values.
+;; ----------------------------------------------------------------------------
+;; 数据库连接配置 —— 生产环境必须覆盖默认值（默认密码 'Welcome$123' 仅供开发）。
+;; ----------------------------------------------------------------------------
 (defvar *crm-database-type* :odbc
   "Possible values are :postgresql :postgresql-socket, :mysql,
 :oracle, :odbc, :aodbc or :sqlite")
@@ -57,6 +91,10 @@
 (defvar *customer-page-title* nil) 
 (defvar *vendor-page-title* nil) 
 (defvar *admin-page-title* nil) 
+;; ----------------------------------------------------------------------------
+;; ABAC 命名前缀。NAME 用于 DB 中的属性/策略/事务名（点分），
+;; FUNC 用于对应 Lisp 函数名（连字符）。PDP/PIP 反射调用时按这两套前缀还原。
+;; ----------------------------------------------------------------------------
 (defvar *ABAC-ATTRIBUTE-NAME-PREFIX* "com.hhub.attribute.")
 (defvar *ABAC-POLICY-NAME-PREFIX* "com.hhub.policy.")
 
@@ -168,6 +206,9 @@
 ;; specific connection specs).
 
 (defun crm-db-connect (&key strdb strusr strpwd servername strdbtype)
+  "用 CLSQL 连接 MySQL（默认 hhubdb / hhubuser）。
+   参数：strdb / strusr / strpwd / servername / strdbtype（连接器类型，:mysql 等）。
+   副作用：clsql:connect；后续所有查询都走该连接。"
   :documentation "This function is responsibile for connecting to the CRM system. Arguments accepted are 
 Database 
 Username
@@ -197,6 +238,7 @@ Database type: Supported type is ':odbc'"
 
 
 (defun init-hhubplatform ()
+  "平台引导（已被 start-das 内联调用，目前主要用于早期开发）。"
   (cond  ((null *dod-debug-mode*)
 	  (setf *dod-database-caching* T))
 	 (*dod-debug-mode*
@@ -206,6 +248,16 @@ Database type: Supported type is ':odbc'"
 
 
 (defun start-das (&optional (withssl nil) (debug-mode T))
+  "Nine Stores 的主启动入口（详见 docs/architecture.md 第 5 节）。
+   流程：
+     1) 起 Hunchentoot easy-acceptor（普通 4244 / SSL 9443）；
+     2) 设置 access/message log 到 ~/hhublogs/；
+     3) crm-db-connect 连 MySQL；
+     4) 预热全局缓存：ABAC 6 张表、币种、GST state、UoM、印度 pincode、shipping zones、各模板；
+     5) initbusinessserver 创建 BusinessServer 单例（CLOS DDD）；
+     6) 启动两个常驻 actor：发邮件 + S3 上传；
+     7) make-otp-store 初始化 *otp-store*。
+   参数：withssl — t 时使用 easy-ssl-acceptor；debug-mode — t 时开 SQL 录制等开发选项。"
   :documentation "Start ninestores server with or without ssl. If withssl is T, then start the hunchentoot server with ssl settings"
   (setf *dod-debug-mode* debug-mode)
   (setf *random-state* (make-random-state t))
@@ -263,6 +315,7 @@ Database type: Supported type is ':odbc'"
 
 
 (defun init-httpserver-withssl ()
+  "起一个 HTTPS Hunchentoot easy-ssl-acceptor（默认 9443）。被 start-das 内部使用。"
 
 ;(ssl-accslogdest (hunchentoot:acceptor-access-log-destination *ssl-http-server* ))
 ;(ssl-msglogdest  (hunchentoot:acceptor-message-log-destination *ssl-http-server*)))
@@ -278,6 +331,8 @@ Database type: Supported type is ':odbc'"
 
 
 (defun stop-das ()
+  "优雅停机：关 Hunchentoot、停 actor、清空全局缓存、断 DB。
+   被 startup/init.lisp 的 6200 端口监听器在收到 telnet 信号时触发。"
   (format t "******** Stopping SQL Recording *******~C"  #\linefeed)
   (clsql:stop-sql-recording :type :both)
   (format t "******** DB Disconnect ********~C" #\linefeed)
@@ -306,6 +361,11 @@ Database type: Supported type is ':odbc'"
 ;;;;*********** Globally Cached lists and their accessor functions *********************************
 ;; 构建全局的功能函数
 (defun hhub-gen-globally-cached-lists-functions ()
+  "ABAC 缓存预热的核心函数。
+   返回一个闭包列表（约 7 项）：分别封装策略、角色、事务、bus-object、abac-subject、
+   attr-lookup、companies 等查询结果，对外通过 hhub-get-cached-* 系列函数访问。
+   重要：策略热更新后必须 (setf *HHUBGLOBALLYCACHEDLISTSFUNCTIONS* (hhub-gen-...))
+        否则新策略不会生效。"
   :documentation "These functions are list returning functions. The various lists are accessible throughout the application. For example, list of all the authorization policies, attributes, etc."
   (let ((policies (get-system-auth-policies))
 	(roles (get-system-roles))
@@ -338,88 +398,107 @@ Database type: Supported type is ':odbc'"
 	  (function (lambda () gst-sac-codes-ht))))) ;13	
 ;;******************************************************************************************
 
+;; 下面一组 hhub-get-cached-* 函数都是从 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*
+;; 中按位置取出闭包并 funcall 拿到具体缓存数据。每个函数对应一种 ABAC/系统级数据。
 (defun hhub-get-cached-auth-policies()
+  "取系统级 ABAC 策略列表（缓存）。"
   :documentation "This function gets a list of all the globally cached policies."
   (let ((policiesfunc (nth 0  *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall policiesfunc)))
 
 (defun hhub-get-cached-roles ()
+  "取系统角色列表（缓存）。"
   :documentation "This function gets a list of all the globally cached roles."
   (let ((rolesfunc (nth 1 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall rolesfunc)))
 
 
 (defun hhub-get-cached-transactions ()
+  "取系统级 ABAC 事务列表（缓存）。"
   :documentation "This function gets a list of all the globally cached transactions."
   (let ((transfunc (nth 2 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall transfunc)))
 
 
 (defun hhub-get-cached-bus-objects ()
+  "取系统级业务对象（资源类型）列表。"
   :documentation "This function gets a list of all the globally cached bus objects for System"
   (let ((busobjfunc (nth 3 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall busobjfunc)))
 
 
 (defun hhub-get-cached-abac-subjects ()
+  "取系统级 ABAC 主体类型列表。"
   :documentation "This function gets a list of all the globally cached ABAC Subjects for System"
   (let ((abacsubjectfunc (nth 4 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall abacsubjectfunc)))
 
 
 (defun hhub-get-cached-abac-attributes ()
+  "取系统级属性元数据列表。"
   :documentation "This function gets a list of all the globally cached ABAC Attrributes for the system"
   (let ((abacattributesfunc (nth 5  *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall abacattributesfunc)))
 
 
 (defun hhub-get-cached-companies ()
+  "取系统已知公司列表（启动时一次性加载）。"
   :documentation "This function gets a list of all the globally cached transactions in a Hashtable."
  (let ((companies-func (nth 6 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
    (funcall companies-func)))
 
 (defun hhub-get-cached-transactions-ht ()
+  "取系统事务的哈希表 trans-func → transaction，PEP 用 O(1) 查找。"
   :documentation "This function gets a list of all the globally cached transactions in a Hashtable."
  (let ((transfunc-ht (nth 7 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall transfunc-ht)))
 
 (defun hhub-get-cached-auth-policies-ht ()
+  "取策略哈希表 row-id → policy 实例，被 has-permission（PDP）查找。"
   :documentation "This function gets a list of all the globally cached ABAC policies in a hashtable."
   (let ((policiesfunc-ht (nth 8 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall policiesfunc-ht)))
 ;; 获取货币，
 (defun hhub-get-cached-currencies-ht ()
+  "取币种哈希表（country → (currency code symbol)）。"
   :documentation "This function gets a list of all the globally cached currencies."
   (let ((currencies-ht (nth 9 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall currencies-ht)))
 
 (defun hhub-get-cached-currency-html-symbols-ht ()
+  "取币种 HTML 实体符号哈希表（INR → '&#8377;' 等）。"
   :documentation "This function gets a list of all the globally cached currencies."
   (let ((currency-html-symbols-ht (nth 10 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall currency-html-symbols-ht)))
 
 (defun hhub-get-cached-currency-fontawesome-symbols-ht ()
+  "取币种 FontAwesome 图标 class 哈希表。"
   :documentation "This function gets a list of all the globally cached currencies."
   (let ((currency-fa-symbols-ht (nth 11 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall currency-fa-symbols-ht)))
 
 (defun hhub-get-cached-gst-hsn-codes-ht ()
+  "取 GST HSN 编码哈希表（4MB+，启动时一次性载入）。"
   :documentation "This function gets a hash table which contains gst hsn codes."
   (let ((gst-hsn-codes-func  (nth 12 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall gst-hsn-codes-func)))
 
 (defun hhub-get-cached-gst-sac-codes-ht ()
+  "取 GST SAC（服务）编码哈希表。"
   :documentation "This function gets a hash table which contains gst hsn codes."
   (let ((gst-sac-codes-func  (nth 13 *HHUBGLOBALLYCACHEDLISTSFUNCTIONS*)))
     (funcall gst-sac-codes-func)))
 
 
 (defun hhub-init-business-function-registrations ()
+  "启动期登记 *HHUBGLOBALBUSINESSFUNCTIONS-HT* 中的业务函数（被 start-das 调用）。"
   :documentation "This function will be called at system startup time to register all the business functions"
   (hhub-register-business-function "com.hhub.businessfunction.getpushnotifysubscriptionforvendor" "com-hhub-businessfunction-getpushnotifysubscriptionforvendor"))
 
 
 (defun nst-load-core-templates ()
+  "把 core/templates 下的 webrepltemplate.html / aboutuspage.html 等装载进
+   *NST-CORE-TEMPLATES* 哈希表（启动时调用一次）。"
   (let ((webrepltemplatehtml (hhub-read-file *NST-WEBREPL-TEMPLATE*))
 	(aboutuspagehtml (hhub-read-file *NST-ABOUTUSPAGE-TEMPLATE*)))
     (function (lambda ()
@@ -427,6 +506,7 @@ Database type: Supported type is ':odbc'"
 	      (function (lambda () aboutuspagehtml)))))))
 
 (defun nst-get-cached-core-template-func (&key templatenum)
+  "按 templatenum 索引取出 core 模板渲染闭包。"
   :documentation "returns the function responsible for invoice email HTML template. Call the returning function to get the HTML."
   (multiple-value-bind (webrepltemplatehtmlfunc aboutuspagehtmlfunc) (funcall *NST-CORE-TEMPLATES*)
     (case templatenum
@@ -438,6 +518,7 @@ Database type: Supported type is ':odbc'"
 ;;;;;;;;;;;;;Agentic AI Experiment with ollama;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun nst-load-vendor-tables-structure-for-agentic-ai ()
+  "把 vendor 相关三张表的 schema TXT 文件载入；供 nl-to-sql / Ollama agent 用作 schema 上下文。"
   (let ((vendprofiletable  (hhub-read-file *dod-vend-profile-table*))
 	(invoiceheadertable (hhub-read-file *dod-invoice-header-table*))
 	(invoiceitemstable (hhub-read-file *dod-invoice-items-table*)))
@@ -447,6 +528,7 @@ Database type: Supported type is ':odbc'"
 	      (function (lambda () invoiceitemstable)))))))
 
 (defun nst-get-cached-vendor-tables-structure-for-agentic-ai  (&key templatenum)
+  "按 templatenum 取出 vendor schema 字符串闭包（1=vend-profile / 2=invoice-header / 3=invoice-items）。"
   :documentation "returns the function responsible for invoice email HTML template. Call the returning function to get the HTML."
   (multiple-value-bind (vendprofiletablefunc invoiceheadertablefunc invoiceitemstablefunc) (funcall *NST-VENDOR-TABLES-FOR-AGENTIC-AI*)
     (case templatenum
@@ -457,6 +539,8 @@ Database type: Supported type is ':odbc'"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun nst-load-invoice-templates ()
+  "载入全部发票 HTML 模板（draft/paid/cancelled/refunded/payreminder/...）+ 5 个 GST 模板，
+   存到 *NST-INVOICE-TEMPLATES* 哈希表。"
   :documentation "Load the invoice templates at startup"
   (let* ((draftemailhtml (hhub-read-file *NST-INVOICEDRAFT-TEMPLATEFILE*))
 	 (invoicepaymenthtml (hhub-read-file *NST-INVOICEPAYMENT-TEMPLATEFILE*))
@@ -492,6 +576,7 @@ Database type: Supported type is ':odbc'"
 
 
 (defun nst-get-cached-invoice-template-func (&key templatenum)
+  "按 templatenum 索引取已缓存的发票模板字符串闭包。"
   :documentation "returns the function responsible for invoice email HTML template. Call the returning function to get the HTML."
   (multiple-value-bind (draftemailhtmlfunc invoicepaymenthtmlfunc paymentreminderhtmlfunc overduepaymentreminderhtmlfunc invoicepaidhtmlfunc invoiceshippedhtmlfunc invoicecancelledhtmlfunc invoicerefundedhtmlfunc gstinvoice1htmlfunc gstinvoice2htmlfunc gstinvoice3htmlfunc gstinvoice4htmlfunc gstinvoice5htmlfunc invoicesettingshtmlfunc invoicesettingsyamlfunc) (funcall *NST-INVOICE-TEMPLATES*)
     (case templatenum
@@ -514,6 +599,7 @@ Database type: Supported type is ':odbc'"
 ;;;;;;;;;;;;;; PRODUCT TEMPLATES ;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun nst-load-product-templates ()
+  "载入商品页 HTML 模板（客户视图/卖家视图）。"
   :documentation "Load the product templates at startup"
   (let* ((prddetailsforcusthtml  (hhub-read-file *NST-PRDDETAILSFORCUST-TEMPLATEFILE*))
 	 (prddetailsforvendhtml  (hhub-read-file *NST-PRDDETAILSFORVEND-TEMPLATEFILE*)))
@@ -523,6 +609,7 @@ Database type: Supported type is ':odbc'"
        (function (lambda () prddetailsforvendhtml)))))))
 
 (defun nst-get-cached-product-template-func (&key templatenum)
+  "按 templatenum 取已缓存的商品模板闭包。"
   :documentation "returns the function responsible for product HTML template. Call the returning function to get the HTML."
   (multiple-value-bind (prddetailsforcusthtmlfunc prddetailsforvendhtmlfunc) (funcall *NST-PRODUCT-TEMPLATES*)
     (case templatenum
@@ -531,6 +618,7 @@ Database type: Supported type is ':odbc'"
 
 ;;;;;;;;;;;;;;;;;;;;;;;ORDER TEMPLATES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defun nst-load-order-templates ()
+  "载入订单 HTML 模板。"
   :documentation "Load the order templates at startup"
   (let* ((ordertemplate1  (hhub-read-file *NST-ORDER-TEMPLATEFILE-1*))
 	 (ordertemplate2  (hhub-read-file *NST-ORDER-TEMPLATEFILE-2*)))
@@ -540,6 +628,7 @@ Database type: Supported type is ':odbc'"
        (function (lambda () ordertemplate2)))))))
 
 (defun nst-get-cached-order-template-func (&key templatenum)
+  "按 templatenum 取已缓存的订单模板闭包。"
   :documentation "returns the function responsible for order HTML template. Call the returning function to get the HTML."
   (multiple-value-bind (ordertemplate1 ordertemplate2) (funcall *NST-ORDER-TEMPLATES*)
     (case templatenum
@@ -550,6 +639,7 @@ Database type: Supported type is ':odbc'"
 
 ;;;;;;;;;;;;;;;;;;;;;;;CUSTOMER TEMPLATES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defun nst-load-customer-templates ()
+  "载入客户自助门店相关 HTML 模板。"
   :documentation "Load the order templates at startup"
   (let* ((duplicatecustomertemplate  (hhub-read-file *NST-DUPLICATE-CUSTOMER-TEMPLATEFILE*)))
     (function (lambda ()
@@ -557,6 +647,7 @@ Database type: Supported type is ':odbc'"
        (function (lambda () duplicatecustomertemplate)))))))
 
 (defun nst-get-cached-customer-template-func (&key templatenum)
+  "按 templatenum 取已缓存的客户模板闭包。"
   :documentation "returns the function responsible for order HTML template. Call the returning function to get the HTML."
   (multiple-value-bind (duplicatecustomertemplate) (funcall *NST-CUSTOMER-TEMPLATES*)
     (case templatenum
@@ -569,12 +660,14 @@ Database type: Supported type is ':odbc'"
 ;;;;;;;;;;;;;;;;;;EMAIL TEMPLATES ;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun nst-load-email-templates ()
+  "载入邮件 HTML 模板（注册/忘记密码/临时密码/新公司请求/Contact-us 等）。"
   :documentation "Load the product templates at startup"
   (let* ((order-email-template (hhub-read-file (format nil "~A/~A" *HHUB-EMAIL-TEMPLATES-FOLDER* *HHUB-GUEST-CUST-ORDER-TEMPLATE-FILE*))))
     (function (lambda ()
       (values (function (lambda () order-email-template)))))))
 
 (defun nst-get-cached-email-template-func (&key templatenum)
+  "按 templatenum 取已缓存的邮件模板闭包。"
   :documentation "returns the function responsible for product HTML template. Call the returning function to get the HTML."
   (multiple-value-bind (orderemailtempl) (funcall *NST-EMAIL-TEMPLATES*)
     (case templatenum
@@ -592,6 +685,8 @@ Database type: Supported type is ':odbc'"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun hhub-register-business-function (name funcsymbol)
+  "把 (name → funcsymbol) 映射注册到 *HHUBGLOBALBUSINESSFUNCTIONS-HT*。
+   备注：与 dod-bl-utl.lisp 中的 hhub-register-network-function 类似但不要求严格名字校验。"
 :documentation "This function registers a new business function and adds it to the *HHUBGLOBALBUSINESSFUNCTIONS-HT* Hash Table. It should conform to naming convention com.hhub.businessfunction*"
   (multiple-value-bind (fname) (ppcre:scan "com.hhub.businessfunction.*" name)
     (when fname
@@ -600,7 +695,9 @@ Database type: Supported type is ':odbc'"
 	  (setf (gethash name  *HHUBGLOBALBUSINESSFUNCTIONS-HT*) funcsymbol))))))
 
 
-(defun hhub-execute-business-function (name params) 
+(defun hhub-execute-business-function (name params)
+  "通用业务函数执行入口（与 dod-bl-utl.lisp 中的 -network- 同义）。
+   按 name 在哈希表里取符号 → intern → funcall；统一捕获 hhub-business-function-error 与通用 error。"
   :documentation "This is a general business function adapter for HHub. It takes parameters in a association list"
 (handler-case 
     (let ((funcsymbol (gethash name *HHUBGLOBALBUSINESSFUNCTIONS-HT*)))
@@ -623,6 +720,7 @@ Database type: Supported type is ':odbc'"
 
 
 (defun hhub-init-business-functions ()
+  "启动期把所有业务函数批量登记到哈希表（被 start-das 调用）。"
   (hhub-register-business-function "com.hhub.businessfunction.bl.getpushnotifysubscriptionforvendor" "com-hhub-businessfunction-bl-getpushnotifysubscriptionforvendor")
 ;;  (hhub-register-business-function "com.hhub.businessfunction.tempstorage.getpushnotifysubscriptionforvendor" "com-hhub-businessfunction-tempstorage-getpushnotifysubscriptionforvendor")
   (hhub-register-business-function "com.hhub.businessfunction.db.getpushnotifysubscriptionforvendor" "com-hhub-businessfunction-db-getpushnotifysubscriptionforvendor")
@@ -646,6 +744,7 @@ Database type: Supported type is ':odbc'"
 
 
 (defmethod initBusinessContexts ((server BusinessServer) ListContextNames)
+  "按名字列表为 BusinessServer 初始化多个 BusinessContext（DDD 用）。"
   (let* ((contexts (mapcar (lambda (contextname) 
 			     (let ((site (make-instance 'BusinessContext)))
 			       (setf (slot-value site 'id)  (format nil "~A" (uuid:make-v1-uuid )))
@@ -655,6 +754,8 @@ Database type: Supported type is ':odbc'"
 
     
 (defun initBusinessServer ()
+  "创建 BusinessServer 单例 *HHUBBUSINESSSERVER* 并初始化关键 BusinessContext 列表。
+   被 start-das 调用，是 DDD 层的入口装配点。"
   (let ((business-server  (make-instance 'BusinessServer)))
     (setf (slot-value business-server 'ipaddress) "127.0.0.1") ;; Not useful Today. May be on future.
     (setf (slot-value business-server 'name) "NineStores")
@@ -664,6 +765,7 @@ Database type: Supported type is ':odbc'"
 
 
 (defun deleteBusinessServer ()
+  "停机时清空 *HHUBBUSINESSSERVER* / 业务 session HT 等 DDD 层状态。"
   (let ((businesscontexts (slot-value *HHUBBUSINESSSERVER* 'BusinessContexts)))
     (loop for bc in businesscontexts do
       (let ((name (slot-value bc 'name)))

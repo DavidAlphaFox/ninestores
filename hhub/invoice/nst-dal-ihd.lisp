@@ -5,9 +5,35 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：invoice 发票 —— 发票头实体定义（新 nst-* DDD/Hexagonal）
+;;;; 分层：DAL（数据访问层 + 领域对象）
+;;;; 文件：hhub/invoice/nst-dal-ihd.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：发票头模块的全部 CLOS 类型：
+;;;;   - 服务类簇：InvoiceHeaderAdapter / Service / DBService / Presenter / HTMLView
+;;;;   - 视图模型：InvoiceHeaderViewModel
+;;;;   - 数据传输：InvoiceHeaderRequestModel / SearchRequestModel /
+;;;;     ContextIDRequestModel / StatusRequestModel / InvoiceHeaderResponseModel
+;;;;   - SessionInvoice：会话内"正在编辑的发票"完整状态
+;;;;   - InvoiceHeader：领域对象（带默认值 status='DRAFT' 等）
+;;;;   - dod-Invoice-Header：CLSQL view-class，映射 DOD_INVOICE_HEADER 表
+;;;;
+;;;; 主要导出：
+;;;;   类簇见上；外部最常用的：
+;;;;   InvoiceHeader（业务对象）、SessionInvoice（会话状态）、dod-Invoice-Header（DAL）
+;;;;
+;;;; 关联：
+;;;;   上游使用方：invoice/nst-bl-ihd.lisp（行为实现）、invoice/nst-ui-ihd.lisp（控制器/视图）
+;;;;   下游依赖：core/hhub-bl-ent.lisp 基类、dod-cust-profile、dod-vend-profile、dod-company
+;;;; ============================================================================
+
 (in-package :nstores)
 
 
+;; ----------------------------------------------------------------------------
+;; 服务类簇：六边形管线具体化（行为实现在 nst-bl-ihd.lisp）
+;; ----------------------------------------------------------------------------
 (defclass InvoiceHeaderAdapter (AdapterService)
   ())
 
@@ -22,6 +48,12 @@
 (defclass InvoiceHeaderHTMLView (HTMLView)
   ())
 
+;; ----------------------------------------------------------------------------
+;; SessionInvoice：会话内的"正在编辑发票"聚合对象。
+;; 持有客户 + 发票头 + 行项列表 + 商品列表 + 实时 GST 汇总；存到
+;; hunchentoot 会话变量 :session-invoices-ht，按 sessioninvkey 索引。
+;; 编辑时直接操作内存对象；保存时再批量持久化。
+;; ----------------------------------------------------------------------------
 (defclass SessionInvoice (BusinessObject)
   ((customer
     :initarg :customer
@@ -30,7 +62,7 @@
     :initarg :invoiceheader
     :accessor invoiceheader)
    (invoiceitems
-    :initarg :inivoiceitems
+    :initarg :inivoiceitems     ; 注意：initarg 拼写为 :inivoiceitems（少一个 'o'，模板残留）
     :accessor invoiceitems
     :initform '())
    (invoicetaxbreakdown
@@ -42,6 +74,7 @@
     :accessor invoiceproducts
     :initform '())))
 
+;; ViewModel：渲染层使用的字段集（不含 row-id / context-id 等内部字段）
 (defclass InvoiceHeaderViewModel (ViewModel)
   ((invnum
     :initarg :invnum
@@ -131,6 +164,7 @@
     :initarg :company
     :accessor company)))
 
+;; ResponseModel：Service 输出给 Presenter 的字段集（与 ViewModel 同构）
 (defclass InvoiceHeaderResponseModel (ResponseModel)
   ((invnum
     :initarg :invnum
@@ -303,6 +337,7 @@
     :accessor company)))
    
 
+;; RequestModel：控制器封装入参后传给 Adapter（含 context-id / custid / custname 等创建用字段）
 (defclass InvoiceHeaderRequestModel (RequestModel)
   ((invnum
     :initarg :invnum
@@ -475,15 +510,19 @@
     :accessor company)))
 
 
+;; 搜索专用 RequestModel
 (defclass InvoiceHeaderSearchRequestModel (InvoiceHeaderRequestModel)
   ())
 
+;; 按 context-id 读取专用 RequestModel（用于幂等取发票）
 (defclass InvoiceHeaderContextIDRequestModel (InvoiceHeaderRequestModel)
   ())
 
+;; 按 status 过滤专用 RequestModel（用于状态切换 UI）
 (defclass InvoiceHeaderStatusRequestModel (InvoiceHeaderRequestModel)
   ())
 
+;; 领域对象 InvoiceHeader：携带默认值 status='DRAFT'，invdate=今天，金额=0
 (defclass InvoiceHeader (BusinessObject)
   ((row-id)
    (invnum
@@ -688,6 +727,35 @@
     :accessor company)))
 
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-Invoice-Header
+;; 表：DOD_INVOICE_HEADER
+;; 含义：发票主单。一张发票包含多条 dod-invoice-items。
+;; 关键字段：
+;;   row-id           主键
+;;   context-id       业务上下文键（用于幂等创建/查询）
+;;   invnum           发票号（人类可见）
+;;   invdate          发票开具日
+;;   custid + custname / custaddr / custgstin  客户字段快照
+;;   vendor-id (→ dod-vend-profile)            开票卖家
+;;   statecode        卖家州代码（GST 计算用）
+;;   billaddr / shipaddr                      账单地址 / 收货地址
+;;   placeofsupply    供应地（GST 计算用，与 statecode 比较判断 intra/interstate）
+;;   revcharge        反向计税标志
+;;   transmode        运输方式
+;;   vnum             车辆号（运输文档）
+;;   totalvalue       发票总额
+;;   totalinwords     金额大写
+;;   bankaccnum / bankifsccode                收款银行信息
+;;   tnc / authsign                           条款 / 授权签章
+;;   finyear          财年（如 '2024-2025'）
+;;   external-url     外部链接（推测：LiveLink / 公开预览）
+;;   status           发票状态（DRAFT/PAID/CANCELLED/REFUNDED 等）
+;;   deleted-state    N/Y 软删
+;;   last-viewed-by-user-id / last-viewed-at  最后查看记录
+;;   updated          最后更新时间（默认当前 wall-time）
+;;   tenant-id        多租户隔离 → dod-company.row-id
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-Invoice-Header ()
   ((row-id
     :db-kind :key

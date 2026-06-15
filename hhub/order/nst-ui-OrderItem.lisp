@@ -5,10 +5,35 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*
+;;;; ============================================================================
+;;;; 模块：order 订单 —— 行项 UI / 控制器（新 nst-* DDD/Hexagonal）
+;;;; 分层：UI（控制器 + CL-WHO 模板 + Presenter 装配）
+;;;; 文件：hhub/order/nst-ui-OrderItem.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：订单行项的 Web UI / 控制器层。属于六边形管线的 UI 端：
+;;;;   - 列表/搜索：com-hhub-transaction-show-OrderItems-page /
+;;;;     com-hhub-transaction-search-OrderItem-action
+;;;;   - 创建/更新：com-hhub-transaction-create-OrderItem-action /
+;;;;     com-hhub-transaction-update-OrderItem-action
+;;;;   - 表单弹窗：com-hhub-transaction-create-OrderItem-dialog
+;;;;   - 行渲染：display-OrderItem-row
+;;;;   - List 视图渲染：RenderListViewHTML（OrderItemHTMLView 特化）
+;;;;
+;;;; 备注：本文件存在若干符号不一致（OrderItems vs OrderItem），属于代码生成模板
+;;;;       残留（推测）—— 例如 show 用 OrderItemsAdapter，搜索/更新用 OrderItemAdapter；
+;;;;       同样 widgets-for-showOrderItem 与 model-for-showOrderItems 名字不严格匹配。
+;;;;       注释只如实说明，不修改代码。
+;;;;
+;;;; 关联：
+;;;;   上游使用方：客户/卖家订单后台路由
+;;;;   下游依赖：order/nst-bl-OrderItem.lisp、core PEP 宏 with-hhub-transaction
+;;;; ============================================================================
+
 (in-package :nstores)
 
 (defun OrderItems-search-html ()
-  :description "This will create a html search box widget"
+  :description "This will create a html search box widget.
+   中文：渲染顶部搜索框。表单 action='searchOrderItemsaction'，结果 div 为 #OrderItemslivesearchresult。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "row"
 	  (:div :id "custom-search-input"
@@ -17,12 +42,18 @@
 			(submitsearchform1event-js "#idOrderItemslivesearch" "#OrderItemslivesearchresult")))))))
 
 (defun com-hhub-transaction-show-OrderItems-page ()
-  :description "This is a show list page for all the OrderItems entities"
+  :description "This is a show list page for all the OrderItems entities.
+   中文：客户视角行项列表 PEP 入口。会话：with-cust-session-check。"
   (with-cust-session-check ;; delete if not needed. 
     (with-mvc-ui-page "OrderItems" #'create-model-for-showOrderItems #'create-widgets-for-showOrderItems :role :customer ))) ;; keep only one role, delete reset. 
 
 (defun create-model-for-showOrderItems ()
-  :description "This is a model function which will create a model to show OrderItems entities"
+  :description "This is a model function which will create a model to show OrderItems entities.
+   中文：行项列表 model：构造 RequestModel/Adapter/Presenter，processreadallrequest 获取
+   行项列表 → CreateAllViewModel；with-hhub-transaction PEP 鉴权。
+   备注：使用 'OrderItemsAdapter' / 'OrderItemsRequestModel' / 'OrderItemsPresenter'，
+   而 nst-dal-OrderItem.lisp 实际定义的类名是 'OrderItemAdapter'（无 s）—— 推测：
+   此模板代码尚未与现有类名对齐，运行此控制器会报 'no such class'。"
   (let* ((company (get-login-company))
 	 (username (get-login-user-name))
 	 (presenterobj (make-instance 'OrderItemsPresenter))
@@ -43,7 +74,10 @@
 	(values viewallmodel htmlview username))))))
 
 (defun create-widgets-for-showOrderItem (modelfunc)
- :description "This is the view/widget function for show OrderItem entities" 
+ :description "This is the view/widget function for show OrderItem entities.
+   中文：列表 widgets：面包屑 + 搜索框 + 'Create OrderItem' 链接 + 列表 + 表单提交 JS。
+   备注：函数名是 'showOrderItem' 单数，但被 'showOrderItems' 控制器经 with-mvc-ui-page 间接调用 ——
+   命名不一致（推测：模板生成残留）。"
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -67,16 +101,20 @@
       (list widget1 widget2 widget3))))
 
 (defun create-widgets-for-updateOrderItem (modelfunc)
-:description "This is a widgets function for update OrderItem entity"      
+:description "This is a widgets function for update OrderItem entity.
+   中文：更新行项后通用重定向 widgets。"
   (funcall #'create-widgets-for-genericredirect modelfunc))
 
 (defmethod RenderListViewHTML ((htmlview OrderItemHTMLView) viewmodellist)
-  :description "This is a HTML View rendering function for OrderItem entities, which will display each OrderItem entity in a row"
+  :description "This is a HTML View rendering function for OrderItem entities, which will display each OrderItem entity in a row.
+   中文：行项表格渲染。表头列长度（38 列）含大量 %N% 占位（推测：模板生成器输出，
+   实际 ViewModel 没有这些字段，仅为占位列名）。"
   (when viewmodellist
     (display-as-table (list "row-id" "order" "product" "vendor" "prd-qty" "unit-price" "disc-rate" "cgst" "sgst" "igst" "addl-tax1-rate" "comments" "fulfilled" "status" "deleted-state" "company" "%16%" "%17%" "%18%" "%19%" "%20%" "%21%" "%22%" "%23%" "%24%" "%25%" "%26%" "%27%" "%28%" "%29%" "%30%" "%31%" "%32%" "%33%" "%34%" "%35%" "%36%" "%37%") viewmodellist 'display-OrderItem-row)))
 
 (defun create-model-for-searchOrderItem ()
-  :description "This is a model function for search OrderItem entities/entity" 
+  :description "This is a model function for search OrderItem entities/entity.
+   中文：搜索 model：把 livesearch 输入文本作为 :field1 装到 OrderItemSearchRequestModel。"
   (let* ((search-clause (hunchentoot:parameter "OrderItemlivesearch"))
 	 (company (get-login-company))
 	 (presenterobj (make-instance 'OrderItemPresenter))
@@ -100,7 +138,8 @@
 
 
 (defun com-hhub-transaction-search-OrderItem-action ()
-  :description "This is a MVC function to search action for OrderItem entities/entity" 
+  :description "This is a MVC function to search action for OrderItem entities/entity.
+   中文：搜索动作：调 model + widgets 拼字符串返回（livesearch 走 AJAX）。"
   (let* ((modelfunc (funcall #'create-model-for-searchOrderItem))
 	 (widgets (funcall #'create-widgets-for-searchOrderItem modelfunc)))
     (cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
@@ -108,7 +147,10 @@
 	(cl-who:str (funcall widget))))))
 
 (defun create-model-for-updateOrderItem ()
-  :description "This is a model function for update OrderItem entity"
+  :description "This is a model function for update OrderItem entity.
+   中文：更新行项 model：从 hunchentoot 取所有字段（unit-price/disc-rate 走 read 解析浮点），
+   构造 RequestModel 调 ProcessUpdateRequest；handler-case 兜底。
+   重定向：/hhub/OrderItem。"
   (let* ((row-id (hunchentoot:parameter "row-id"))
 	 (order (hunchentoot:parameter "order"))
 	 (product (hunchentoot:parameter "product"))
@@ -160,7 +202,9 @@
 
 
 (defun create-model-for-createOrderItem ()
-  :description "This is a create model function for creating a OrderItem entity"
+  :description "This is a create model function for creating a OrderItem entity.
+   中文：创建行项 model：与 update 同样从 hunchentoot 取参数，构造 RequestModel 后
+   ProcessCreateRequest。备注：:company 在 :initargs 中出现两次（模板残留，无害）。"
   (let* ((row-id (hunchentoot:parameter "row-id"))
 	 (order (hunchentoot:parameter "order"))
 	 (product (hunchentoot:parameter "product"))
@@ -213,7 +257,10 @@
 	  (error 'hhub-business-function-error :errstring (format t "got an exception ~A" c)))))))
 
 (defun com-hhub-transaction-create-OrderItem-dialog (&optional domainobj)
-  :description "This function creates a dialog to create OrderItem entity"
+  :description "This function creates a dialog to create OrderItem entity.
+   中文：创建/编辑行项的弹窗表单。每个字段一个 input。无 domainobj 时 action='createOrderItemaction'，
+   有 domainobj 时 action='updateOrderItemaction'。备注：表单含全部内部字段（含 deleted-state /
+   fulfilled / company），属于模板自动生成的样式，业务上是否合适需要 review。"
   (let* ((row-id  (if domainobj (slot-value domainobj 'row-id)))
 	 (order  (if domainobj (slot-value domainobj 'order)))
 	 (product  (if domainobj (slot-value domainobj 'product)))
@@ -277,14 +324,16 @@
 
 
 (defun create-widgets-for-createOrderItem (modelfunc)
-  :description "This is a create widget function for OrderItem entity"
+  :description "This is a create widget function for OrderItem entity.
+   中文：创建后通用 redirect widgets。"
   (funcall #'create-widgets-for-genericredirect modelfunc))
 
 
 
 
 (defun create-widgets-for-searchOrderItem (modelfunc)
-  :description "This is a widget function for search OrderItem entities"
+  :description "This is a widget function for search OrderItem entities.
+   中文：搜索结果 widgets：'Add OrderItem' 按钮 + Bootstrap modal 编辑弹窗 + 行项表格。"
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
@@ -302,7 +351,10 @@
 
  
 (defun display-OrderItem-row (OrderItem)
-  :description "This function has HTML row code for OrderItem entity row"
+  :description "This function has HTML row code for OrderItem entity row.
+   中文：单行 <td> 渲染：所有字段平铺成 16+ 列，最后一列两个 modal-dialog（v2 + v1）打开编辑弹窗。
+   备注：同一 row-id 下挂了两个 modal（modal-dialog-v2 + modal-dialog），容易冲突 ——
+   推测：模板转换期间残留，运行实例上以 v2 为准。"
   (with-slots (row-id order product vendor prd-qty unit-price disc-rate cgst sgst igst addl-tax1-rate comments fulfilled status deleted-state company %16% %17% %18% %19% %20% %21% %22% %23% %24% %25% %26% %27% %28% %29% %30% %31% %32% %33% %34% %35% %36% %37%) OrderItem 
     (cl-who:with-html-output (*standard-output* nil)
       (:td  :height "10px" (cl-who:str row-id))
@@ -328,14 +380,16 @@
 
 
 (defun com-hhub-transaction-update-OrderItem-action ()
-  :description "This is the MVC function to update action for OrderItem entity"
+  :description "This is the MVC function to update action for OrderItem entity.
+   中文：更新行项 PEP 入口。会话：with-cust-session-check。返回：重定向 URL。"
   (with-cust-session-check ;; delete if not needed. 
     (let ((url (with-mvc-redirect-ui  #'create-model-for-updateOrderItem #'create-widgets-for-updateOrderItem)))
       (format nil "~A" url))))
 
 
 (defun com-hhub-transaction-create-OrderItem-action ()
-  :description "This is a MVC function for create OrderItem entity"
+  :description "This is a MVC function for create OrderItem entity.
+   中文：创建行项 PEP 入口。会话：with-cust-session-check。"
   (with-cust-session-check ;; delete if not needed. 
     (let ((url (with-mvc-redirect-ui  #'create-model-for-createOrderItem #'create-widgets-for-createOrderItem)))
       (format nil "~A" url))))

@@ -5,8 +5,57 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：products —— 商品主数据 / 价格 / 类目 / SAC 税码
+;;;; 分层：DAL（数据访问层）
+;;;; 文件：hhub/products/dod-dal-prd.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义商品域核心 CLSQL view-class —— 商品主表、定价、商品 GST、商品类目、
+;;;;       SAC 税码 —— 一一映射到对应数据库表。
+;;;;
+;;;; 主要导出：
+;;;;   dod-prd-master       — 商品主表 DOD_PRD_MASTER
+;;;;   dod-product-pricing  — 商品定价表 DOD_PRODUCT_PRICING
+;;;;   dod-product-gst      — 商品 GST 税率表（注意：base-table 同名 dod_product_pricing，疑似复用同表存税率字段）
+;;;;   dod-prd-catg         — 商品类目表 DOD_PRD_CATG（含 nested set lft/rgt 用于树形）
+;;;;   dod-gst-sac-codes    — 服务类 SAC 税码表 DOD_GST_SAC_CODES
+;;;;
+;;;; 关联：
+;;;;   上游使用方：products/dod-bl-prd.lisp（CRUD/业务）、订单/库存/购物车模块
+;;;;   下游依赖：dod-vend-profile（商家）、dod-prd-catg（类目）、dod-company（租户）
+;;;; ============================================================================
+
 (in-package :nstores)
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-prd-master
+;; 表：DOD_PRD_MASTER
+;; 含义：商品主数据（每行一个 SKU 级商品）。承载基本属性、价格、库存、上架审批
+;;       状态、各种条码（SKU/UPC/EAN/JAN/ISBN）、物流尺寸、所属商家、所属类目。
+;; 关键字段：
+;;   row-id            主键
+;;   prd-name          商品名（NOT NULL）
+;;   description       描述
+;;   vendor-id         外键 → dod-vend-profile.row-id（所属商家）
+;;   catg-id           外键 → dod-prd-catg.row-id（类目）
+;;   qty-per-unit      每单位数量（如 1 瓶=500ml 时为 500）
+;;   unit-of-measure   单位（KG/G/L/PCS 等）
+;;   prd-image-path    图片路径
+;;   current-price / current-discount  当前价 / 折扣（与 dod-product-pricing 配合）
+;;   units-in-stock    库存
+;;   hsn-code          GST HSN 编码（用于查税率）
+;;   sku/upc/ean/jan/isbn/serial-no   各类外部条码
+;;   external-url      外部商品地址
+;;   shipping-*        物流尺寸/重量
+;;   active-flag       Y/N 上架激活
+;;   deleted-state     Y/N 软删
+;;   subscribe-flag    Y/N 是否订阅型商品
+;;   approved-flag     Y/N CAD 审批通过
+;;   approval-status   PENDING/APPROVED/REJECTED
+;;   prd-type          SALE/PUR 等
+;;   product-code      系统编码（默认 NST-<10 位随机>，由 :void-value 表达式生成）
+;;   tenant-id         多租户隔离键 → dod-company.row-id
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-prd-master ()
   ((row-id
     :db-kind :key
@@ -171,9 +220,19 @@
   (:keys row-id))
 
 
-;; PRODUCT PRICING
-
-
+;; ----------------------------------------------------------------------------
+;; 实体：dod-product-pricing
+;; 表：DOD_PRODUCT_PRICING
+;; 含义：商品分时段定价。同一商品可叠加多条不同 [start-date, end-date] 的价格。
+;; 关键字段：
+;;   product-id    外键 → dod-prd-master.row-id
+;;   price         价格
+;;   discount      折扣
+;;   currency      币种（默认 INR）
+;;   start-date / end-date  生效起止日期
+;;   active-flag   Y/N 启用
+;;   tenant-id     多租户键
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-product-pricing ()
   ((row-id
     :db-kind :key
@@ -238,6 +297,13 @@
 
 
 ;;;;;;;;;;;; PRODUCT GST ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ----------------------------------------------------------------------------
+;; 实体：dod-product-gst
+;; 表：DOD_PRODUCT_PRICING（注意 base-table 名字与 dod-product-pricing 相同 ——
+;;     推测：早期实现复用同张表来存税率，与 pricing 字段并存；新代码不一定使用）
+;; 含义：商品在某时段的 GST 税率快照（cgst/sgst/igst/compcess + 同期 price/discount）。
+;; 关键字段：cgstrate / sgstrate / igstrate / compcess + price / discount + 时间窗。
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-product-gst ()
   ((row-id
     :db-kind :key
@@ -320,7 +386,18 @@
 ;;;;;;;;;;;;; END PRODUCT GST TABLE ;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; Product category
-
+;; ----------------------------------------------------------------------------
+;; 实体：dod-prd-catg
+;; 表：DOD_PRD_CATG
+;; 含义：商品类目，使用 nested set 模型 (lft / rgt) 存树形结构 ——
+;;       祖先/后代查询通过 BETWEEN [lft,rgt] 区间实现。
+;; 关键字段：
+;;   catg-name      类目名（NOT NULL）
+;;   lft / rgt      nested set 左右边界整型
+;;   active-flag    Y/N
+;;   deleted-state  软删
+;;   tenant-id      多租户键
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-prd-catg ()
   ((row-id
     :db-kind :key
@@ -374,6 +451,14 @@
 
 
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-gst-sac-codes
+;; 表：DOD_GST_SAC_CODES
+;; 含义：服务类（Service Accounting Code）税码与对应 GST 税率。
+;; 关键字段：sac-code / sac-description / sac-code-4digit / cgst / sgst / igst /
+;;          condition-txt（适用条件）/ gst-sac-func（动态规则函数名 —— 推测：与
+;;          HSN 表相似，按字符串 intern 调用）。
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-gst-sac-codes ()
   ((row-id
     :db-kind :key

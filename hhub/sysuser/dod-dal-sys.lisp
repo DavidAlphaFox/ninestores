@@ -5,8 +5,42 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：sysuser —— 系统级静态参考数据：货币 / 计量单位 / GST UQC
+;;;; 分层：DAL（数据访问层） + 内嵌静态数据 / 工具函数
+;;;; 文件：hhub/sysuser/dod-dal-sys.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：
+;;;;   - 定义 dod-currncy（货币基础表）的 CLSQL view-class，映射到 dod_currency；
+;;;;   - 提供大量内嵌的静态映射表 / 哈希表构造函数：
+;;;;       货币 → FontAwesome 图标类
+;;;;       货币 → HTML 实体符号
+;;;;       UOM 计量单位 → (描述, GST UQC code)；
+;;;;   - 提供 UOM↔UQC 工具：取描述、取 UQC、判断纯 UQC 代码、批量迁移等。
+;;;;
+;;;; 主要导出：
+;;;;   dod-currncy                       — view-class for DOD_CURRENCY
+;;;;   get-currency-fontawesome-map      — 货币代码 → FontAwesome 图标类哈希
+;;;;   get-currency-html-symbol-map      — 货币代码 → HTML 字符实体哈希（150+ 币种）
+;;;;   get-system-UOM-map                — UOM code → (description gst-uqc) 哈希（equalp，大小写不敏感）
+;;;;   get-uom-description / get-gst-uqc / get-all-gst-uqc-codes / is-gst-compliant-uqc-p
+;;;;   migrate-uom-to-uqc-for-product    — 把单个 product 的 UOM 映射到 UQC slot
+;;;;   generate-uqc-migration-sql        — 生成 UPDATE DOD_PRD_MASTER 的迁移 SQL 字符串
+;;;;
+;;;; 关联：
+;;;;   上游使用方：发票/订单 GST 输出（UQC）、货币展示组件
+;;;;   下游依赖：无（纯静态映射 + dod-currncy 表）
+;;;; ============================================================================
+
 (in-package :nstores)
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-currncy
+;; 表：DOD_CURRENCY
+;; 含义：基础货币表（国家/币种/代码/符号）。
+;; 关键字段：country / currency / code（如 'INR'/'USD'）/ curr-symbol。
+;; 备注：注意视图类名拼写 'currncy'（非 'currency'）。
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-currncy ()
   ((country 
     :accessor country
@@ -32,6 +66,8 @@
 
 
 (defun get-currency-fontawesome-map ()
+  "返回一个哈希表 { 'INR' → 'fa-solid fa-indian-rupee-sign', 'USD' → ... }。
+   仅含两种货币的 FA 图标，前端按代码取出 class 字符串显示。"
   (let ((curr-fa-symbols (list (list "INR" "fa-solid fa-indian-rupee-sign")
 			       (list "USD" "fa-solid fa-dollar-sign")))
 	(ht (make-hash-table :test 'equal)))
@@ -43,6 +79,8 @@
     
 
 (defun get-currency-html-symbol-map ()
+  "返回一个哈希表，把 ISO 4217 货币代码映射到对应的 HTML 数字字符引用。
+   包含 150+ 主流币种（AED/AFN/.../ZWL）。前端用以渲染金额货币符号。"
   (let ((curr-html-symbols (list (list "AED" "&#1583;.&#1573;")
 				 (list "AFN"  "&#65;&#102;")
 				 (list "ALL"  "&#76;&#101;&#107;")
@@ -211,13 +249,20 @@
 (defun get-system-UOM-map ()
   "Returns hash table mapping UOM codes to (description gst-uqc).
    Supports both international UOMs and GST-compliant UQC codes.
-   
+
    Usage:
    (gethash \"PCS\" ht) → (\"Piece\" \"NOS\")
    (gethash \"LTR\" ht) → (\"Litres\" \"LTR\")
-   
+
    First element: User-friendly description
-   Second element: GST UQC code for GSTR-1 compliance"
+   Second element: GST UQC code for GSTR-1 compliance.
+
+   中文：返回大小写不敏感（equalp）哈希表，把任意 UOM 代码映射到二元组
+         (用户友好描述, GSTR-1 合规的 UQC 代码)。
+         数据分三大段：
+         (1) GST UQC 主代码：NOS/KGS/LTR/MTR/BOX/...；
+         (2) 国际/常用别名→映射到对应 UQC（PCS→NOS、KG→KGS、Kg→KGS、...）；
+         (3) 帝制/能源/时间等非 GST 单位→统一映射 'OTH'。"
   
   (let ((uom-map 
          (list
@@ -462,21 +507,24 @@
 
 ;; Helper functions
 (defun get-uom-description (uom-code)
-  "Get user-friendly description for a UOM code."
+  "Get user-friendly description for a UOM code.
+   中文：从 UOM 哈希表取该代码的描述（如 'PCS' → 'Pieces'）。未命中返回 nil。"
   (let* ((ht (get-system-UOM-map))
          (entry (gethash uom-code ht)))
     (when entry (first entry))))
 
 (defun get-gst-uqc (uom-code)
-  "Get GST-compliant UQC code for any UOM code."
+  "Get GST-compliant UQC code for any UOM code.
+   中文：把任意 UOM 代码映射到 GST 合规的 UQC；未识别时回退 'OTH'。"
   (let* ((ht (get-system-UOM-map))
          (entry (gethash uom-code ht)))
-    (if entry 
+    (if entry
         (second entry)
         "OTH"))) ; Default to Others if not found
 
 (defun get-all-gst-uqc-codes ()
-  "Get list of pure GST UQC codes only (not aliases)."
+  "Get list of pure GST UQC codes only (not aliases).
+   中文：返回纯 UQC 主代码列表（不含别名），共 ~44 个。"
   '("NOS" "KGS" "LTR" "MTR" "BOX" "PAC" "BTL" "BAG" "SET"
     "GMS" "MTS" "QTL" "TON" "MLT" "KLR" "CBM" "CCM"
     "CMS" "KME" "YDS" "GYD" "SQM" "SQF" "SQY"
@@ -485,22 +533,24 @@
     "TBS" "UGS" "UNT" "BOU" "BKL" "OTH"))
 
 (defun is-gst-compliant-uqc-p (code)
-  "Check if code is a pure GST UQC (not an alias)."
+  "Check if code is a pure GST UQC (not an alias).
+   中文：判定 code 是否为纯 UQC 主代码。比较时统一大写。"
   (member (string-upcase code) (get-all-gst-uqc-codes) :test #'string=))
 
 ;; Usage examples
 (defun example-usage ()
+  ;; 中文：示例用法演示，本身没有副作用，仅作文档。
   ;; Get description
   (get-uom-description "PCS")     ; → "Pieces"
   (get-uom-description "LTR")     ; → "Litres"
-  
+
   ;; Get GST UQC mapping
   (get-gst-uqc "PCS")            ; → "NOS"
   (get-gst-uqc "LTR")            ; → "LTR"
   (get-gst-uqc "Kg")             ; → "KGS"
   (get-gst-uqc "BOTTLE")         ; → "BTL"
   (get-gst-uqc "UNKNOWN")        ; → "OTH"
-  
+
   ;; Check if pure GST code
   (is-gst-compliant-uqc-p "NOS") ; → T
   (is-gst-compliant-uqc-p "PCS") ; → NIL (it's an alias)
@@ -510,7 +560,11 @@
 ;; Database migration helper
 (defun migrate-uom-to-uqc-for-product (product)
   "Migrate product's unit_of_measure to GST-compliant UQC.
-   Keeps original UOM for display, adds UQC for GST compliance."
+   Keeps original UOM for display, adds UQC for GST compliance.
+   中文：把单个商品的 unit-of-measure 字段映射到 uqc slot。
+         若已是纯 UQC 则直接复用，否则查表得到对应 UQC。
+   副作用：仅改对象 slot（不直接写库），调用方需另行 update。
+   备注：依赖 product 拥有 'uqc' slot（推测：dod-prd-master 已新增此 slot）。"
   (let ((current-uom (slot-value product 'unit-of-measure))
         (gst-uqc (get-gst-uqc (slot-value product 'unit-of-measure))))
     
@@ -527,7 +581,9 @@
 
 ;; SQL migration query
 (defun generate-uqc-migration-sql ()
-  "Generate SQL to populate UQC field from unit_of_measure."
+  "Generate SQL to populate UQC field from unit_of_measure.
+   中文：返回一段 UPDATE SQL 字符串，用 CASE WHEN 把 unit_of_measure 映射到 UQC 列。
+   仅当 UQC IS NULL 才填值，已有数据不覆盖。返回值是字符串，调用方自行执行。"
   "UPDATE DOD_PRD_MASTER 
    SET UQC = CASE
      -- Pure GST codes (keep as-is)

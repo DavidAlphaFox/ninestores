@@ -1,8 +1,24 @@
-;;; unit-tests.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
+;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— 简易单元测试集合（顶层脚本）
+;;;; 分层：平台基础（开发期 REPL 脚本）
+;;;; 文件：hhub/core/unit-tests.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：在 SLIME REPL 里手工跑的"端到端"小脚本：
+;;;;       1) 在 demo 公司里创建测试 customer / vendor / product；
+;;;;       2) 创建订单、订单明细、订单偏好；
+;;;;       3) 演示软删除 + 恢复。
+;;;;       注：本文件是"加载即执行"的顶层 form，会真正写入数据库 —— 仅在开发环境跑。
+;;;;
+;;;; 主要导出（多为顶层 defparameter 测试数据）：
+;;;;   dod-company、Testcustomer1、Testvendor1、TestOrder1、Testproduct
+;;;;   prepare-test-customer / test-create-customer / test-delete-customer
+;;;;   prepare-test-orders / test-order-details
+;;;;
+;;;; 关联：
+;;;;   下游依赖：customer / vendor / product / order 各模块的 BL 函数
+;;;;   备注：正式测试在 hhub/test/ 下；本文件更接近"REPL 段子"。
+;;;; ============================================================================
 
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -80,6 +96,10 @@
 ;********************** create a new product ****************************
 
 (defun prepare-test-customer ()
+  "在 'Gopalan Atlantis' 公司下准备测试客户的闭包。
+   返回值不重要 —— 副作用是定义出 test-create-customer / test-delete-customer 两个内层 defun。
+   备注：内嵌 defun 不是惯用做法（每次调用 prepare 都会重定义全局函数），
+         视为开发期手稿。"
   (let* ((dod-company (select-company-by-name "Gopalan Atlantis"))
 					;******Create the customer ******
 	 (customer-params (list (format nil "Test Customer ~a" (random 200)) "GA Bangalore 560066" (format nil "98456~a" (random 99999)) dod-company))
@@ -93,6 +113,8 @@
 
 
 (defun prepare-test-orders (customer-id company-name)
+  "为指定 customer 准备订单测试上下文（按公司名 + 客户主键查找）。
+   副作用：内层 defun 定义 test-order-details；返回该函数的最终值。"
   (let* ((dod-company (select-company-by-name company-name))
 	 (customer (select-customer-by-id customer-id dod-company))
 	 (order (get-orders-for-customer customer)))

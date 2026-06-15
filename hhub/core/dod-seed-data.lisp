@@ -5,6 +5,28 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— 种子数据加载（一次性 REPL 脚本）
+;;;; 分层：平台基础（数据初始化）
+;;;; 文件：hhub/core/dod-seed-data.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：在新装系统/重置环境时，把 ABAC 元数据（策略、角色、主体类型、属性、事务）
+;;;;       连同基础角色 / ABAC subject 一次性灌库。
+;;;;       本文件采用"加载即执行"风格 —— defparameter 配合顶层 mapcar 调用 BL 函数。
+;;;;       注意：再次加载会重复 INSERT；只在新环境跑一次。
+;;;;
+;;;; 主要导出（数据列表）：
+;;;;   policylist      — 策略种子（约 22 条 com.hhub.policy.*）
+;;;;   transactions    — 事务种子（URI ↔ 控制器函数 ↔ 策略 占位）
+;;;;   rolelist        — 三个基础角色：SUPERADMIN/OPERATOR/COMPADMIN
+;;;;   abacsubjects    — 五种主体类型（CUSTOMER/VENDOR/SUPERADMIN/...）
+;;;;   attrlist        — 属性元数据种子
+;;;;
+;;;; 关联：
+;;;;   下游依赖：core/dod-bl-pol.lisp（seed-auth-policies、create-auth-attr-lookup 等）、
+;;;;             core/dod-bl-rol.lisp（create-role）、
+;;;;             core/dod-bl-bo.lisp（create-bus-transaction、create-abac-subject）
+;;;; ============================================================================
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 

@@ -5,8 +5,37 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：order 订单 —— 订单实体定义（新 nst-* DDD/Hexagonal）
+;;;; 分层：DAL（数据访问层 + 领域对象）
+;;;; 文件：hhub/order/nst-dal-Order.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义新订单子系统的全部 CLOS 类型。涵盖：
+;;;;   - 服务类簇（orderAdapter / orderService / orderDBService /
+;;;;               orderPresenter / orderHTMLView）
+;;;;   - 数据传输 / 视图模型（orderRequestModel / orderSearchRequestModel /
+;;;;                          orderResponseModel / orderViewModel）
+;;;;   - 领域对象 order（继承 BusinessObject）
+;;;;   - dod-order CLSQL view-class —— 与新版 DOD_ORDER 表 1:1 映射
+;;;;     （含 GST 拆分 / TDS / E-way Bill / 反向计税等合规字段）
+;;;;
+;;;; 主要导出：
+;;;;   orderAdapter / orderService / orderDBService / orderPresenter / orderHTMLView
+;;;;   orderRequestModel / orderSearchRequestModel / orderResponseModel / orderViewModel
+;;;;   order（领域对象）
+;;;;   dod-order（CLSQL，table=DOD_ORDER）
+;;;;
+;;;; 关联：
+;;;;   上游使用方：order/nst-bl-Order.lisp、order/nst-ui-Order.lisp、
+;;;;               invoice 模块（订单转发票）
+;;;;   下游依赖：dod-cust-profile、dod-company、core 基类
+;;;; ============================================================================
+
 (in-package :nstores)
 
+;; ----------------------------------------------------------------------------
+;; 服务类簇：六边形管线的具体化（行为实现在 nst-bl-Order.lisp）
+;; ----------------------------------------------------------------------------
 (defclass orderAdapter (AdapterService)
   ())
 
@@ -21,6 +50,7 @@
 (defclass orderHTMLView (HTMLView)
   ())
 
+;; ViewModel：渲染层使用的字段视图（与 RequestModel/ResponseModel 字段同构）
 (defclass orderViewModel (ViewModel)
   ((row-id
     :initarg :row-id
@@ -134,6 +164,7 @@
     :initarg :company
     :accessor company)))
 
+;; ResponseModel：Service 输出给 Presenter 的字段集
 (defclass orderResponseModel (ResponseModel)
   ((row-id
     :initarg :row-id
@@ -248,6 +279,7 @@
     :accessor company)))
    
 
+;; RequestModel：控制器把请求参数封装后传给 Adapter
 (defclass orderRequestModel (RequestModel)
   ((row-id
     :initarg :row-id
@@ -362,9 +394,11 @@
     :accessor company)))
 
 
+;; 搜索专用 RequestModel（继承自 orderRequestModel）
 (defclass orderSearchRequestModel (orderRequestModel)
   ())
 
+;; 领域对象：order（六边形架构核心 BusinessObject 子类）
 (defclass order (BusinessObject)
   ((row-id
     :initarg :row-id
@@ -479,6 +513,26 @@
     :accessor company)))
 
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-order
+;; 表：DOD_ORDER（新版完整字段集）
+;; 含义：客户主单。一笔多卖家订单包含多条 dod-vendor-orders 子单（按 vendor 拆）。
+;; 关键字段分组：
+;;   关系 / 用户：cust-id（→ dod-cust-profile）、created-by-user-id、approved-by-user-id
+;;   订单标识：ordnum、context-id、status（PEN/CMP/CAN）、order-type、
+;;            order-source（POS/ONLINE/WHATSAPP/API）、order-fulfilled
+;;   时间字段：ord-date / req-date / shipped-date / expected-delivery-date / invoice-date
+;;   金额：order-amt / total-taxable-value / total-tax / total-discount / shipping-cost
+;;   GST 拆分：total-cgst / total-sgst / total-igst / total-cess
+;;   合规：place-of-supply、supply-type（INTRA_STATE/INTER_STATE）、gst-number、
+;;        reverse-charge-applicable、eway-bill-required、tds-applicable、tds-amount
+;;   地址快照：ship-* 与 bill-*（zipcode/city/state/full-text）+ country + bill-same-as-ship
+;;   工作流：payment-mode、is-converted-to-invoice、invoice-number、is-cancelled、
+;;          cancel-reason、store-pickup-enabled、comments、external-url
+;;   审计：tenant-id（多租户）、deleted-state、created/updated（字符串）
+;; 备注：created/updated 类型用 (string 30) 而非 timestamp —— 推测是为了兼容
+;;       旧 schema/迁移期间的不同列定义（git log 中已见 'wall-time' → string 30）。
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-order ()
   ((row-id
     :db-kind :key

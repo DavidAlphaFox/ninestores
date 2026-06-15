@@ -5,10 +5,42 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*
+;;;; ============================================================================
+;;;; 模块：order 订单 —— 订单 UI / 控制器（新 nst-* DDD/Hexagonal）
+;;;; 分层：UI（控制器 + CL-WHO 模板 + Presenter 装配）
+;;;; 文件：hhub/order/nst-ui-Order.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：order 领域的 Web UI 入口 + 一组 PEP 事务控制器：
+;;;;   - 列表/搜索：com-hhub-transaction-show-order-page /
+;;;;     com-hhub-transaction-search-order-action
+;;;;   - 创建：com-hhub-transaction-create-order-action（含弹窗 dialog）
+;;;;   - 更新：com-hhub-transaction-update-order-action
+;;;;   - 行渲染：display-order-row（37 列字段 + 编辑按钮）
+;;;;   - 列表渲染：RenderListViewHTML（orderHTMLView 特化）
+;;;;
+;;;; 主要导出：
+;;;;   order-search-html
+;;;;   com-hhub-transaction-show-order-page / -search-order-action
+;;;;   com-hhub-transaction-create-order-action / -update-order-action
+;;;;   com-hhub-transaction-create-order-dialog
+;;;;   create-model-for-showorder / -searchorder / -updateorder / -createorder
+;;;;   create-widgets-for-showorder / -searchorder / -updateorder / -createorder
+;;;;   display-order-row / RenderListViewHTML
+;;;;
+;;;; 备注：本文件几乎全部由代码生成器模板生成（推测）。表单 dialog 字段平铺所有内部字段，
+;;;;       业务上未必合适使用 —— 类似于 nst-ui-OrderItem.lisp。
+;;;;       :order-fulfilled 在表单里出现两次（input 重复，模板 bug）。
+;;;;
+;;;; 关联：
+;;;;   上游使用方：客户后台路由
+;;;;   下游依赖：order/nst-bl-Order.lisp、core PEP 宏 with-hhub-transaction
+;;;; ============================================================================
+
 (in-package :nstores)
 
 (defun order-search-html ()
-  :description "This will create a html search box widget"
+  :description "This will create a html search box widget.
+   中文：渲染顶部搜索框（livesearch + AJAX）。表单 action='searchorderaction'，结果 div #orderlivesearchresult。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "row"
 	  (:div :id "custom-search-input"
@@ -17,12 +49,15 @@
 			(submitsearchform1event-js "#idorderlivesearch" "#orderlivesearchresult")))))))
 
 (defun com-hhub-transaction-show-order-page ()
-  :description "This is a show list page for all the order entities"
+  :description "This is a show list page for all the order entities.
+   中文：客户视角订单列表 PEP 入口。会话：with-cust-session-check。"
   (with-cust-session-check ;; delete if not needed. 
     (with-mvc-ui-page "order" #'create-model-for-showorder #'create-widgets-for-showorder :role :customer))) ;; keep only one role, delete reset. 
 
 (defun create-model-for-showorder ()
-  :description "This is a model function which will create a model to show order entities"
+  :description "This is a model function which will create a model to show order entities.
+   中文：列表 model：构造 RequestModel/Adapter/Presenter，processreadallrequest 取所有订单 →
+   processresponselist → CreateAllViewModel；with-hhub-transaction PEP 鉴权。"
   (let* ((company (get-login-company))
 	 (username (get-login-user-name))
 	 (presenterobj (make-instance 'orderPresenter))
@@ -43,7 +78,8 @@
 	(values viewallmodel htmlview username))))))
 
 (defun create-widgets-for-showorder (modelfunc)
- :description "This is the view/widget function for show order entities" 
+ :description "This is the view/widget function for show order entities.
+   中文：列表 widgets：面包屑 + 搜索框 + 'Create order' 链接 + 列表 + 表单提交 JS。"
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -67,16 +103,19 @@
       (list widget1 widget2 widget3))))
 
 (defun create-widgets-for-updateorder (modelfunc)
-:description "This is a widgets function for update order entity"      
+:description "This is a widgets function for update order entity.
+   中文：更新订单后通用 redirect widgets。"
   (funcall #'create-widgets-for-genericredirect modelfunc))
 
 (defmethod RenderListViewHTML ((htmlview orderHTMLView) viewmodellist)
-  :description "This is a HTML View rendering function for order entities, which will display each order entity in a row"
+  :description "This is a HTML View rendering function for order entities, which will display each order entity in a row.
+   中文：订单表格渲染。表头列出全部内部字段（38 列，最后一列 '{37}' 为占位）。"
   (when viewmodellist
     (display-as-table (list "row-id" "ord-date" "req-date" "shipped-date" "expected-delivery-date" "ordnum" "shipaddr" "shipzipcode" "shipcity" "shipstate" "billaddr" "billzipcode" "billcity" "billstate" "billsameasship" "storepickupenabled" "gstnumber" "gstorgname" "order-fulfilled" "order-amt" "shipping-cost" "total-discount" "total-tax" "payment-mode" "comments" "context-id" "customer" "status" "deleted-state" "is-converted-to-invoice" "is-cancelled" "cancel-reason" "order-type" "external-url" "order-source" "custname" "company" "{37}") viewmodellist 'display-order-row)))
 
 (defun create-model-for-searchorder ()
-  :description "This is a model function for search order entities/entity" 
+  :description "This is a model function for search order entities/entity.
+   中文：搜索 model：把 livesearch 文本作为 :field1 装到 orderSearchRequestModel。"
   (let* ((search-clause (hunchentoot:parameter "orderlivesearch"))
 	 (company (get-login-company))
 	 (presenterobj (make-instance 'orderPresenter))
@@ -100,7 +139,8 @@
 
 
 (defun com-hhub-transaction-search-order-action ()
-  :description "This is a MVC function to search action for order entities/entity" 
+  :description "This is a MVC function to search action for order entities/entity.
+   中文：搜索动作：调 model + widgets 拼字符串返回（livesearch 走 AJAX）。"
   (let* ((modelfunc (funcall #'create-model-for-searchorder))
 	 (widgets (funcall #'create-widgets-for-searchorder modelfunc)))
     (cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
@@ -108,7 +148,10 @@
 	(cl-who:str (funcall widget))))))
 
 (defun create-model-for-updateorder ()
-  :description "This is a model function for update order entity"
+  :description "This is a model function for update order entity.
+   中文：更新订单 model：从 hunchentoot 取所有字段构造 RequestModel → ProcessUpdateRequest。
+   handler-case 兜底，重定向 /hhub/order。备注：所有字段都按字符串读取（含浮点的 order-amt 等），
+   推测：DAL 层在 setf 时再做类型转换或保持字符串。"
   (let* ((row-id (hunchentoot:parameter "row-id"))
 	 (ord-date (hunchentoot:parameter "ord-date"))
 	 (req-date (hunchentoot:parameter "req-date"))
@@ -199,7 +242,8 @@
 	  (error 'hhub-business-function-error :errstring (format t "got an exception ~A" c)))))))
 
 (defun create-model-for-createorder ()
-  :description "This is a create model function for creating a order entity"
+  :description "This is a create model function for creating a order entity.
+   中文：创建订单 model（同 update 取参，调 ProcessCreateRequest）。"
   (let* ((row-id (hunchentoot:parameter "row-id"))
 	 (ord-date (hunchentoot:parameter "ord-date"))
 	 (req-date (hunchentoot:parameter "req-date"))
@@ -291,7 +335,12 @@
 	  (error 'hhub-business-function-error :errstring (format t "got an exception ~A" c)))))))
 
 (defun com-hhub-transaction-create-order-dialog (&optional domainobj)
-  :description "This function creates a dialog to create order entity"
+  :description "This function creates a dialog to create order entity.
+   中文：创建/编辑订单的弹窗表单。每个字段一个 input。无 domainobj 时 action='createorderaction'，
+   否则 'updateorderaction'。
+   备注：order-fulfilled 在表单中出现两次（input 重复，模板 bug）；
+        external-url 字段的 :value 错绑了 cancel-reason（推测：模板 bug）。
+        本函数仅渲染 HTML，未更动业务代码。"
   (let* ((row-id  (if domainobj (slot-value domainobj 'row-id)))
 	 (ord-date  (if domainobj (slot-value domainobj 'ord-date)))
 	 (req-date  (if domainobj (slot-value domainobj 'req-date)))
@@ -414,11 +463,13 @@
 			  (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Submit"))))))))
 
 (defun create-widgets-for-createorder (modelfunc)
-  :description "This is a create widget function for order entity"
+  :description "This is a create widget function for order entity.
+   中文：创建订单后通用 redirect widgets。"
   (funcall #'create-widgets-for-genericredirect modelfunc))
 
 (defun create-widgets-for-searchorder (modelfunc)
-  :description "This is a widget function for search order entities"
+  :description "This is a widget function for search order entities.
+   中文：搜索结果 widgets：'Add order' 按钮 + Bootstrap modal + 列表。"
   (multiple-value-bind (viewallmodel htmlview) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
@@ -433,7 +484,8 @@
       (list widget1))))
  
 (defun display-order-row (order)
-  :description "This function has HTML row code for order entity row"
+  :description "This function has HTML row code for order entity row.
+   中文：单行 <td> 渲染：所有字段平铺成 37 列，最末一列编辑按钮（modal-dialog-v2）。"
   (with-slots (row-id ord-date req-date shipped-date expected-delivery-date ordnum shipaddr shipzipcode shipcity shipstate billaddr billzipcode billcity billstate billsameasship storepickupenabled gstnumber gstorgname order-fulfilled order-amt shipping-cost total-discount total-tax payment-mode comments context-id customer status deleted-state is-converted-to-invoice is-cancelled cancel-reason order-type external-url order-source custname company) order 
     (cl-who:with-html-output (*standard-output* nil)
       (:td  :height "10px" (cl-who:str row-id))
@@ -479,14 +531,16 @@
 
 
 (defun com-hhub-transaction-update-order-action ()
-  :description "This is the MVC function to update action for order entity"
+  :description "This is the MVC function to update action for order entity.
+   中文：更新订单 PEP 入口。会话：with-cust-session-check。"
   (with-cust-session-check ;; delete if not needed. 
     (let ((url (with-mvc-redirect-ui  #'create-model-for-updateorder #'create-widgets-for-updateorder)))
       (format nil "~A" url))))
 
 
 (defun com-hhub-transaction-create-order-action ()
-:description "This is a MVC function for create order entity"
+:description "This is a MVC function for create order entity.
+   中文：创建订单 PEP 入口。会话：with-cust-session-check。"
   (with-cust-session-check ;; delete if not needed. 
     (let ((url (with-mvc-redirect-ui  #'create-model-for-createorder #'create-widgets-for-createorder)))
       (format nil "~A" url))))

@@ -5,6 +5,44 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：warehouse —— 仓库业务逻辑（含所有权 / GST / 多类型，41 字段）
+;;;; 分层：BL（业务逻辑层）—— 新风格（DDD：BusinessService / Adapter / Presenter / DBService）
+;;;; 文件：hhub/warehouse/dod-bl-wrh.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：warehouse 模块全套业务方法：
+;;;;       - DBService：db-fetch / db-fetch-all
+;;;;       - 查询：select-warehouse-by-{id,name,code,uuid,gstin}、
+;;;;               select-matching-warehouses / -by-city / -by-state-code、
+;;;;               select-primary-warehouse / select-all-warehouses /
+;;;;               select-vendor-warehouses / select-warehouses-by-ownership /
+;;;;               get-active-warehouses
+;;;;       - ID 生成：generate-warehouse-uuid / generate-warehouse-short-code
+;;;;       - CRUD 服务方法：doCreate / doRead / doReadAll / doUpdate / doDelete
+;;;;         （配合 ProcessXxxRequest Adapter dispatch）
+;;;;       - 拷贝：createWarehouseObject、copyWarehouse-domaintodb、copyWarehouse-dbtodomain
+;;;;       - 响应/视图：ProcessResponse / ProcessResponseList / CreateResponseModel /
+;;;;                   CreateViewModel / CreateAllViewModel / RenderJSON / RenderJSONAll
+;;;;
+;;;; 主要导出：
+;;;;   select-warehouse-by-id / -by-name / -by-code / -by-uuid / -by-gstin
+;;;;   select-matching-warehouses / select-warehouses-by-city / -by-state-code
+;;;;   select-primary-warehouse / select-all-warehouses / select-vendor-warehouses
+;;;;   select-warehouses-by-ownership / get-active-warehouses
+;;;;   generate-warehouse-uuid / generate-warehouse-short-code
+;;;;   createWarehouseObject / copyWarehouse-domaintodb / copyWarehouse-dbtodomain
+;;;;
+;;;; 关联：
+;;;;   上游使用方：warehouse/dod-ui-wrh.lisp（控制器 / JSON API）。
+;;;;   下游依赖：warehouse/dod-dal-wrh.lisp（实体 + 类）、core knowledge framework
+;;;;             （with-db-create / with-db-update / with-db-delete / with-db-call-list /
+;;;;              with-db-read-one / bo-knowledge / bo-knowledge-truth /
+;;;;              bo-knowledge-payload）。
+;;;;
+;;;; 备注：本文件为项目"新风格"——所有 CRUD 走 BusinessService + DBService 协作，
+;;;;       并把 with-db-* 宏返回的"知识对象"挂回 service 以供上游调用方读取真值/payload。
+;;;; ============================================================================
+
 ;; nst-bl-warehouse.lisp
 ;; Business Logic Layer for Warehouse entity (UPDATED with ownership fields - 41 fields)
 (in-package :nstores)
@@ -15,7 +53,9 @@
 ;;; ===========================================================================
 
 (defmethod db-fetch ((dbas WarehouseDBService) row-id)
-  :description "Fetch the DBObject based on row-id"
+  :description "Fetch the DBObject based on row-id.
+   中文：按 (tenant-id, row-id) 取一条已启用、未软删的 dod-warehouse，
+   并把它挂到 dbas.dbobject。tenant-id 来自 dbas.company.row-id。"
   (let* ((company (slot-value dbas 'company))
          (tenant-id (slot-value company 'row-id))
          (dbobj (car (clsql:select 'dod-warehouse :where
@@ -28,7 +68,9 @@
     (setf (slot-value dbas 'dbobject) dbobj)))
 
 (defmethod db-fetch-all ((dbas WarehouseDBService) (rm WarehouseRequestModel))
-  :description "Fetch records by COMPANY"
+  :description "Fetch records by COMPANY.
+   中文：按 (tenant-id, owner-entity-id=vendor-id) 列出该 vendor 在该租户下的全部仓库
+   （已启用、未软删）。注意：tenant-id 直接从 dbas 取，不是从 rm.company 取。"
   (let* ((tenant-id (slot-value dbas 'tenant-id))
          (vendor (slot-value rm 'vendor))
          (vendor-id (slot-value vendor 'row-id))
@@ -46,7 +88,9 @@
 ;;; ===========================================================================
 
 (defun select-warehouse-by-id (id tenant-id)
-  "Select warehouse by row-id"
+  "Select warehouse by row-id.
+   中文：按 (tenant-id, row-id) 取单条未软删 dod-warehouse。返回实例 / nil。
+   注意：未过滤 active-flag，被禁用仓库也能命中。"
   (car (clsql:select 'dod-warehouse :where 
                      [and 
 		      [= [:tenant-id] tenant-id]
@@ -55,7 +99,8 @@
                      :caching *dod-database-caching* :flatp t)))
 
 (defun select-warehouse-by-name (wname tenant-id)
-  "Select warehouse by name"
+  "Select warehouse by name.
+   中文：按 w-name 精确匹配，返回租户下未软删的第一条仓库。"
   (car (clsql:select 'dod-warehouse :where
                      [and 
                       [= [:w-name] wname]
@@ -64,7 +109,8 @@
                      :caching *dod-database-caching* :flatp t)))
 
 (defun select-warehouse-by-code (warehouse-code tenant-id)
-  "Select warehouse by business code"
+  "Select warehouse by business code.
+   中文：按业务码 warehouse-code（如 WH-XXXXXXXX）在租户内查仓库。未启用 CLSQL 缓存。"
   (car (clsql:select 'dod-warehouse 
                      :where [and
                              [= [:warehouse-code] warehouse-code]
@@ -73,7 +119,8 @@
                      :flatp t)))
 
 (defun select-warehouse-by-uuid (warehouse-uuid tenant-id)
-  "Select warehouse by UUID"
+  "Select warehouse by UUID.
+   中文：按系统 UUID 在租户内查仓库。未启用 CLSQL 缓存。"
   (car (clsql:select 'dod-warehouse 
                      :where [and
                              [= [:warehouse-uuid] warehouse-uuid]
@@ -82,7 +129,8 @@
                      :flatp t)))
 
 (defun select-warehouse-by-gstin (gstin)
-  "Select warehouse by GSTIN"
+  "Select warehouse by GSTIN.
+   中文：按 GSTIN 全局查仓库（未限定 tenant_id，跨租户取第一条）。"
   (car (clsql:select 'dod-warehouse :where
                      [and 
                       [= [:warehouse-gstin] gstin]
@@ -90,7 +138,8 @@
                      :caching *dod-database-caching* :flatp t)))
 
 (defun select-matching-warehouses (wname-like tenant-id)
-  "Select warehouses matching partial name"
+  "Select warehouses matching partial name.
+   中文：按 w-name LIKE %xxx% 模糊查仓库，最多 200 条。供搜索框用。"
   (clsql:select 'dod-warehouse :where
                 [and 
                  [like [:w-name] (format nil "%~a%" wname-like)]
@@ -100,7 +149,8 @@
                 :caching *dod-database-caching* :flatp t))
 
 (defun select-warehouses-by-city (city tenant-id)
-  "Select warehouses by city"
+  "Select warehouses by city.
+   中文：按城市精确查询，返回最多 200 条仓库列表。"
   (clsql:select 'dod-warehouse :where
                 [and 
                  [= [:w-city] city]
@@ -110,7 +160,8 @@
                 :caching *dod-database-caching* :flatp t))
 
 (defun select-warehouses-by-state-code (state-code tenant-id)
-  "Select warehouses by state code"
+  "Select warehouses by state code.
+   中文：按 GST 州代码（state-code，2 位字符串）查仓库列表。"
   (clsql:select 'dod-warehouse :where
                 [and 
                  [= [:state-code] state-code]
@@ -119,7 +170,8 @@
                 :caching *dod-database-caching* :flatp t))
 
 (defun select-primary-warehouse (tenant-id)
-  "Select primary warehouse location"
+  "Select primary warehouse location.
+   中文：查租户的主仓（is-primary-location=1，integer 1 而非 'Y'）。返回单条 / nil。"
   (car (clsql:select 'dod-warehouse :where
                      [and
                       [= [:tenant-id] tenant-id]
@@ -128,7 +180,8 @@
                      :caching *dod-database-caching* :flatp t)))
 
 (defun select-all-warehouses (tenant-id)
-  "Select all warehouses for a tenant"
+  "Select all warehouses for a tenant.
+   中文：列出某租户全部未软删仓库（最多 200）。不限制 active-flag。"
   (clsql:select 'dod-warehouse :where
                 [and
                  [= [:tenant-id] tenant-id]
@@ -137,7 +190,9 @@
                 :caching *dod-database-caching* :flatp t))
 
 (defun select-vendor-warehouses (vendor-id tenant-id)
-  "Select all warehouses owned by a vendor"
+  "Select all warehouses owned by a vendor.
+   中文：列出某 vendor（owner-entity-type='SELLER' 且 owner-entity-id=vendor-id）
+   在某租户下的全部未软删仓库（最多 200）。"
   (clsql:select 'dod-warehouse :where
                 [and
                  [= [:tenant-id] tenant-id]
@@ -148,7 +203,9 @@
                 :caching *dod-database-caching* :flatp t))
 
 (defun select-warehouses-by-ownership (ownership-type owner-entity-type owner-entity-id tenant-id)
-  "Select warehouses by ownership criteria"
+  "Select warehouses by ownership criteria.
+   中文：按 (ownership-type, owner-entity-type, owner-entity-id, tenant-id) 全字段精准筛选，
+   适用于诸如 'BONDED + GOVERNMENT' 等组合查询。"
   (clsql:select 'dod-warehouse :where
                 [and
                  [= [:ownership-type] ownership-type]
@@ -159,7 +216,8 @@
                 :caching *dod-database-caching* :flatp t))
 
 (defun get-active-warehouses (tenant-id)
-  "Get all active warehouses for a tenant"
+  "Get all active warehouses for a tenant.
+   中文：列出租户下 active-flag='Y' 且未软删的全部仓库；不带 200 上限。"
   (clsql:select 'dod-warehouse :where
                 [and
                  [= [:tenant-id] tenant-id]
@@ -172,11 +230,13 @@
 ;;; ===========================================================================
 
 (defun generate-warehouse-uuid ()
-  "Generate UUID for warehouse"
+  "Generate UUID for warehouse.
+   中文：生成 v4 UUID 字符串作为 warehouse-uuid 主键。"
   (format nil "~A" (uuid:make-v4-uuid)))
 
 (defun generate-warehouse-short-code ()
-  "Generate short alphanumeric code: WH-XXXXXXXX"
+  "Generate short alphanumeric code: WH-XXXXXXXX.
+   中文：截取 v4 UUID 前 8 位转大写，加 'WH-' 前缀。仅用作业务展示码。"
   (let* ((uuid (uuid:make-v4-uuid))
          (uuid-str (format nil "~A" uuid))
          (short-id (subseq uuid-str 0 8)))
@@ -187,19 +247,26 @@
 ;;; ===========================================================================
 
 (defmethod ProcessCreateRequest ((adapter WarehouseAdapter) (requestmodel WarehouseRequestModel))
-  :description "Adapter Service method to call the BusinessService Create method. Returns the created Warehouse object."
+  :description "Adapter Service method to call the BusinessService Create method. Returns the created Warehouse object.
+   中文：把 Adapter 的 BusinessService 设为 WarehouseService，再委托父类 dispatch 调 doCreate。"
   (setf (slot-value adapter 'businessservice) (find-class 'WarehouseService))
   (call-next-method))
 
 (defmethod init ((dbas WarehouseDBService) (bo Warehouse))
-  :description "Set the DB object and domain object"
+  :description "Set the DB object and domain object.
+   中文：初始化 WarehouseDBService —— 创建一个空的 dod-warehouse 挂到 dbas，
+   再用 bo.company 做 setcompany 设定租户上下文。"
   (let* ((dbobj (make-instance 'dod-warehouse)))
     (setf (dbobject dbas) dbobj)
     (setcompany dbas (slot-value bo 'company))
     (call-next-method)))
 
 (defmethod doCreate ((service WarehouseService) (requestmodel WarehouseRequestModel))
-  :description "Create a new warehouse with ownership fields"
+  :description "Create a new warehouse with ownership fields.
+   中文：从 requestmodel 抽出全部字段，自动生成 uuid + warehouse-code，
+   构造 Warehouse 业务对象，通过 with-db-create 落库；同时把返回的"知识对象"
+   挂到 service.bo-knowledge 供上层读取真值/payload。返回：新建的业务对象。
+   副作用：INSERT DOD_WAREHOUSE，写日志。"
   (let* ((warehousedbservice (make-instance 'WarehouseDBService))
          ;; Basic fields
          (wname (slot-value requestmodel 'wname))
@@ -273,6 +340,7 @@
       warehouseobj)))
 
 (defmethod doCreate :around ((service WarehouseService) (requestmodel WarehouseRequestModel))
+  ":around 钩子，目前只是 call-next-method（占位，方便后续插入审计/锁等逻辑）。"
   (call-next-method))
 
 (defun createWarehouseObject (wname waddr1 waddr2 wpin wcity wstate wcountry 
@@ -286,7 +354,9 @@
                                eway-bill-enabled latitude longitude 
                                valuation-method hsn-wise-stock pan-number 
                                warehouse-uuid warehouse-code company)
-  "Create a warehouse domain object with ownership fields"
+  "Create a warehouse domain object with ownership fields.
+   中文：纯构造函数——把所有 41 字段塞进新建的 Warehouse 业务对象。
+   不做持久化。"
   (make-instance 'Warehouse 
                  :wname wname
                  :waddr1 waddr1
@@ -329,13 +399,16 @@
                  :company company))
 
 (defmethod Copy-BusinessObject-To-DBObject ((dbas WarehouseDBService))
-  :description "Syncs the dbobject and the domainobject"
+  :description "Syncs the dbobject and the domainobject.
+   中文：把 Warehouse 业务对象字段同步进 dod-warehouse 数据库对象。"
   (let ((dbobj (slot-value dbas 'dbobject))
         (domainobj (slot-value dbas 'businessobject)))
     (setf (slot-value dbas 'dbobject) (copyWarehouse-domaintodb domainobj dbobj))))
 
 (defun copyWarehouse-domaintodb (source destination)
-  "Copy warehouse domain object to database object with ownership fields"
+  "Copy warehouse domain object to database object with ownership fields.
+   中文：业务对象字段（wname/waddr1/...）→ DB 字段（w-name/w-addr1/...，加连字符）。
+   同时设置 deleted-state='N' 与 tenant-id（来自 source.company）。返回 destination。"
   (let ((company (slot-value source 'company)))
     (with-slots (w-name w-addr1 w-addr2 w-pin w-city w-state w-country 
                  w-manager w-phone w-alt-phone w-email active-flag deleted-state
@@ -396,12 +469,15 @@
 ;;; ===========================================================================
 
 (defmethod ProcessReadRequest ((adapter WarehouseAdapter) (requestmodel WarehouseRequestModel))
-  :description "Adapter service method to read a single Warehouse"
+  :description "Adapter service method to read a single Warehouse.
+   中文：把 BusinessService 设为 WarehouseService，再 call-next-method 调 doRead。"
   (setf (slot-value adapter 'businessservice) (find-class 'WarehouseService))
   (call-next-method))
 
 (defmethod doRead ((service WarehouseService) (requestmodel WarehouseRequestModel))
-  :description "Read a warehouse by row-id"
+  :description "Read a warehouse by row-id.
+   中文：用 with-db-read-one 宏读单条 warehouse，并把知识对象挂到 service。
+   当 truth=:T 时返回 payload（拷过的 Warehouse 业务对象），否则返回 nil。"
   (let* ((warehousedbservice (make-instance 'WarehouseDBService))
          (comp (company requestmodel))
          (row-id (row-id requestmodel))
@@ -415,14 +491,16 @@
 	warehouseobj))))
 
 (defmethod Copy-DbObject-To-BusinessObject ((dbas WarehouseDBService))
-  :description "Syncs the dbobject and domain object"
+  :description "Syncs the dbobject and domain object.
+   中文：把 DB 对象字段同步回 Warehouse 业务对象，并把 dbas.company 挂上去。"
   (let ((dbobj (slot-value dbas 'dbobject))
         (domainobj (slot-value dbas 'businessobject)))
     (setf (slot-value domainobj 'company) (company dbas))
     (setf (slot-value dbas 'businessobject) (copyWarehouse-dbtodomain dbobj domainobj))))
 
 (defun copyWarehouse-dbtodomain (source destination)
-  "Copy database object to warehouse domain object with ownership fields"
+  "Copy database object to warehouse domain object with ownership fields.
+   中文：DB 字段 w-name → 业务字段 wname 等的反向拷贝。返回 destination。"
   (with-slots (row-id wname waddr1 waddr2 wpin wcity wstate wcountry 
                wmanager wphone waltphone wemail activeflag
                ownership-type owner-entity-type owner-entity-id
@@ -481,12 +559,16 @@
 ;;; ===========================================================================
 
 (defmethod ProcessReadAllRequest ((adapter WarehouseAdapter) (requestmodel WarehouseRequestModel))
-  :description "Adapter service method to read all Warehouses"
+  :description "Adapter service method to read all Warehouses.
+   中文：列出 vendor 拥有的所有仓库；BusinessService 设为 WarehouseService 后调 doReadAll。"
   (setf (slot-value adapter 'businessservice) (find-class 'WarehouseService))
   (call-next-method))
 
 (defmethod doReadAll ((service WarehouseService) (requestmodel WarehouseRequestModel))
-  :description "Read all warehouses for a vendor/owner"
+  :description "Read all warehouses for a vendor/owner.
+   中文：with-db-call-list 包裹 select-vendor-warehouses 的结果，
+   再把每条 dod-warehouse 拷为 Warehouse 业务对象返回列表。
+   备注：当 truth=:T 才返回，否则隐式返回 nil。"
   (let* ((comp (company requestmodel))
          (tenant-id (slot-value comp 'row-id))
          (vendor (vendor requestmodel))
@@ -501,12 +583,15 @@
                     (copyWarehouse-dbtodomain dbobject domainobj))) readalllst)))))
 
 (defmethod ProcessReadAllRequest ((adapter WarehouseAdapter) (requestmodel WarehouseSearchRequestModel))
-  :description "Adapter service method to search Warehouses"
+  :description "Adapter service method to search Warehouses.
+   中文：搜索专用版本，dispatch 到 doReadAll/WarehouseSearchRequestModel 实现。"
   (setf (slot-value adapter 'businessservice) (find-class 'WarehouseService))
   (call-next-method))
 
 (defmethod doReadAll ((service WarehouseService) (requestmodel WarehouseSearchRequestModel))
-  :description "Search warehouses by name"
+  :description "Search warehouses by name.
+   中文：从 requestmodel 取 wname 作为 LIKE 模糊条件，调 select-matching-warehouses
+   后拷成业务对象列表。注意：本方法不像无搜索版本那样使用 with-db-call-list 包装。"
   (let* ((comp (company requestmodel))
          (wname-like (slot-value requestmodel 'wname))
          (tenant-id (slot-value comp 'row-id))
@@ -521,12 +606,17 @@
 ;;; ===========================================================================
 
 (defmethod ProcessUpdateRequest ((adapter WarehouseAdapter) (requestmodel WarehouseRequestModel))
-  :description "Adapter service method to call the BusinessService Update method"
+  :description "Adapter service method to call the BusinessService Update method.
+   中文：把 BusinessService 设为 WarehouseService 并 dispatch 到 doUpdate。"
   (setf (slot-value adapter 'businessservice) (find-class 'WarehouseService))
   (call-next-method))
 
 (defmethod doUpdate ((service WarehouseService) (requestmodel WarehouseRequestModel))
-  :description "Update an existing warehouse with ownership fields"
+  :description "Update an existing warehouse with ownership fields.
+   中文：先 select-warehouse-by-id 取出旧记录，逐字段覆盖（含 GST/物流/经纬度/库存），
+   updated 字段写入 mysql-now()，再用 with-db-update 落库（同时挂回 service.bo-knowledge）。
+   返回：更新后的 Warehouse 业务对象。
+   副作用：UPDATE DOD_WAREHOUSE。"
   (let* ((warehousedbservice (make-instance 'WarehouseDBService))
          ;; Basic fields
 	 (row-id (slot-value requestmodel 'row-id))
@@ -637,12 +727,15 @@
 ;;; ===========================================================================
 
 (defmethod ProcessDeleteRequest ((adapter WarehouseAdapter) (requestmodel WarehouseRequestModel))
-  :description "Adapter service method to call the BusinessService Delete method"
+  :description "Adapter service method to call the BusinessService Delete method.
+   中文：把 BusinessService 设为 WarehouseService 并 dispatch 到 doDelete。"
   (setf (slot-value adapter 'businessservice) (find-class 'WarehouseService))
   (call-next-method))
 
 (defmethod doDelete ((service WarehouseService) (requestmodel WarehouseRequestModel))
-  :description "Soft delete a warehouse"
+  :description "Soft delete a warehouse.
+   中文：取 row-id 与租户后调 select-warehouse-by-id；with-db-delete 宏完成软删
+   （:allow-idempotent T 表示重复删除不报错）。返回：业务对象。"
   (let* ((warehousedbservice (make-instance 'WarehouseDBService))
          (row-id  (slot-value requestmodel 'row-id))
          (comp (company requestmodel))
@@ -667,18 +760,21 @@
 ;;; ===========================================================================
 
 (defmethod ProcessResponse ((adapter WarehouseAdapter) (busobj Warehouse))
-  :description "Process warehouse business object to response model"
+  :description "Process warehouse business object to response model.
+   中文：把 Warehouse 业务对象拷成 WarehouseResponseModel 返回。"
   (let ((responsemodel (make-instance 'WarehouseResponseModel)))
     (createresponsemodel adapter busobj responsemodel)))
 
 (defmethod ProcessResponseList ((adapter WarehouseAdapter) warehouselist)
-  :description "Process list of warehouse business objects"
+  :description "Process list of warehouse business objects.
+   中文：批量把 Warehouse 业务对象列表转为 WarehouseResponseModel 列表。"
   (mapcar (lambda (domainobj)
             (let ((responsemodel (make-instance 'WarehouseResponseModel)))
               (createresponsemodel adapter domainobj responsemodel))) warehouselist))
 
 (defmethod CreateResponseModel ((adapter WarehouseAdapter) (source Warehouse) (destination WarehouseResponseModel))
-  :description "Create response model from warehouse business object with ownership fields"
+  :description "Create response model from warehouse business object with ownership fields.
+   中文：业务对象 → 响应 DTO 的全字段拷贝。"
   (with-slots (row-id wname waddr1 waddr2 wpin wcity wstate wcountry 
                wmanager wphone waltphone wemail activeflag
                ownership-type owner-entity-type owner-entity-id
@@ -738,7 +834,9 @@
 ;;; ===========================================================================
 
 (defmethod CreateViewModel ((presenter WarehousePresenter) (responsemodel WarehouseResponseModel))
-  :description "Create view model from response model with ownership fields"
+  :description "Create view model from response model with ownership fields.
+   中文：响应 DTO → 视图 DTO 的全字段拷贝。返回 viewmodel（与 vendor 那边的笔误不同，
+   本文件正确返回 viewmodel）。"
   (let ((viewmodel (make-instance 'WarehouseViewModel)))
     (with-slots (row-id wname waddr1 waddr2 wpin wcity wstate wcountry 
                  wmanager wphone waltphone wemail activeflag
@@ -795,7 +893,8 @@
     viewmodel))
 
 (defmethod CreateAllViewModel ((presenter WarehousePresenter) responsemodellist)
-  :description "Create view models from list of response models"
+  :description "Create view models from list of response models.
+   中文：批量响应 DTO → 视图 DTO。"
   (mapcar (lambda (responsemodel)
             (createviewmodel presenter responsemodel)) responsemodellist))
 
@@ -804,7 +903,11 @@
 ;;; ===========================================================================
 
 (defmethod RenderJSON ((view WarehouseJSONView) (viewmodel WarehouseViewModel))
-  :description "Render warehouse view model as JSON with ownership fields"
+  :description "Render warehouse view model as JSON with ownership fields.
+   中文：把 viewmodel 转 (rowId/warehouseUuid/warehouseCode/...) camelCase 键 alist，
+   再 json:encode-json-to-string 打包为 {success, failure, truth, payload} 形态。
+   备注：用于 JSON API 响应；与 RenderJSONAll 的 payload 字段差异较大，
+        单条版本字段更完整。"
   (with-slots (row-id wname waddr1 waddr2 wpin wcity wstate wcountry 
                wmanager wphone waltphone wemail activeflag
                ownership-type owner-entity-type owner-entity-id
@@ -862,7 +965,10 @@
       jsondata)))
 
 (defmethod RenderJSONAll ((view WarehouseJSONView) viewmodellist)
-  :description "Render list of warehouse view models as JSON with ownership fields"
+  :description "Render list of warehouse view models as JSON with ownership fields.
+   中文：批量版 JSON 输出；每条只包含 (rowId, name, city, state, phone,
+   ownership-*, warehouse-gstin, warehouse-type, isPrimaryLocation, activeFlag) 等
+   摘要字段。最终响应携带 count 计数。"
   (let* ((payload (mapcar (lambda (vm)
                             (with-slots (row-id wname waddr1 waddr2 wpin wcity wstate 
                                          wcountry wmanager wphone waltphone wemail 

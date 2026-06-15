@@ -1,12 +1,41 @@
-;;; dod-dal-vas.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
+;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：vendor —— 卖家预约时段（Vendor Availability Slot / Appointment）
+;;;; 分层：DAL（数据访问层）
+;;;; 文件：hhub/vendor/dod-dal-vas.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义 dod-vendor-appointment 的 CLSQL view-class，
+;;;;       一一映射到 MySQL 表 DOD_VENDOR_APPOINTMENT。
+;;;;       记录某 vendor 与某 customer 在某日期/时段的预约。
+;;;;
+;;;; 主要导出：
+;;;;   dod-vendor-appointment  —— 卖家预约实体
+;;;;
+;;;; 关联：
+;;;;   上游使用方：vendor/dod-bl-vas.lisp（预约 CRUD）
+;;;;   下游依赖：vendor/dod-dal-ven.lisp（dod-vend-profile）、
+;;;;             customer 模块（dod-cust-profile）、account（dod-company）、core（dod-users）。
+;;;; ============================================================================
 
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
+;; ----------------------------------------------------------------------------
+;; 实体：dod-vendor-appointment
+;; 表：DOD_VENDOR_APPOINTMENT
+;; 含义：vendor ↔ customer 预约时段记录。
+;; 关键字段：
+;;   row-id            主键
+;;   vendor-id         外键 → dod-vend-profile
+;;   customer-id       外键 → dod-cust-profile
+;;   appt-date         预约日期
+;;   start-time / end-time   预约起止时间
+;;   active-flg        Y/N 启用标志
+;;   comments          备注
+;;   tenant-id         多租户隔离键 → dod-company.row-id
+;;   created-by        创建者 → dod-users.row-id
+;;   deleted-state     N/Y 软删标志
+;; ----------------------------------------------------------------------------
 (clsql:def-view-class dod-vendor-appointment ()
   ((row-id
     :db-kind :key

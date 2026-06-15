@@ -5,9 +5,34 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— 站点级公共 UI（公开页 + 营销页）
+;;;; 分层：UI 控制器/视图层
+;;;; 文件：hhub/core/dod-ui-site.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：渲染所有"对外公开"页面 —— 站点页脚、Cookie 政策弹窗、
+;;;;       Terms / Privacy / About / Contact / Pricing 静态信息页。
+;;;;       这些页面不需要登录或 ABAC，但仍走 with-standard-admin-page /
+;;;;       with-mvc-ui-page 模板宏渲染。
+;;;;
+;;;; 主要导出：
+;;;;   hhub-html-page-footer            — 全站页脚
+;;;;   modal.hhub-cookie-policy         — Cookie 政策弹窗内容
+;;;;   hhub-controller-tnc-page         — /hhub/tnc
+;;;;   hhub-controller-privacy-page     — /hhub/privacy
+;;;;   hhub-controller-aboutus-page     — /hhub/aboutuspage
+;;;;   hhub-controller-contactus-page   — /hhub/contactuspage（含 reCAPTCHA v2）
+;;;;   hhub-controller-contactus-action — /hhub/contactusaction（POST 提交）
+;;;;   hhub-controller-pricing          — /hhub/pricing（套餐对比）
+;;;;
+;;;; 关联：
+;;;;   上游使用方：路由派发 / 主页 / 注册流程跳转
+;;;;   下游依赖：with-standard-admin-page / with-mvc-ui-page / send-contactus-email
+;;;; ============================================================================
 (in-package :nstores)
 
 (defun hhub-html-page-footer ()
+  "渲染全站统一页脚：导航链接 + 版权信息 + Cookie 政策模态触发。"
   (cl-who:with-html-output (*standard-output* nil)
     (:footer
         (:div :class "container"
@@ -30,6 +55,7 @@
 
 
 (defun modal.hhub-cookie-policy ()
+  "Cookie 政策模态框正文（嵌入页脚链接的弹窗）。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div :class "panel panel-default"
 	  (:div :class "panel-heading" "Cookie Policy"
@@ -42,7 +68,8 @@
 (:p :class "small" "By continuing to navigate our website without changing your cookie settings, you hereby acknowledge and agree to Nine Stores' use of cookies.")))))))
 
 (defun hhub-controller-tnc-page ()
-  :documentation "Terms and Conditions Page"
+  :documentation "Terms and Conditions Page
+   中文：URL /hhub/tnc。读取静态文件 *HHUB-TERMSANDCONDITIONS-FILE* 内容并嵌入主体。"
   (let* ((tncstr (hhub-read-file (format nil "~A/~A" *HHUB-STATIC-FILES* *HHUB-TERMSANDCONDITIONS-FILE*))))
     (with-standard-admin-page "Nine Stores - Terms"
       (:div :class "row"
@@ -51,7 +78,8 @@
       (hhub-html-page-footer))))
 
 (defun hhub-controller-privacy-page ()
-  :documentation "Privacy Page"
+  :documentation "Privacy Page
+   中文：URL /hhub/privacy。读取静态文件 *HHUB-PRIVACY-FILE* 内容并嵌入主体。"
  (let* ((privacystr (hhub-read-file (format nil "~A/~A" *HHUB-STATIC-FILES* *HHUB-PRIVACY-FILE*))))
     (with-standard-admin-page "Nine Stores - Privacy"
       (:div :class "row"
@@ -60,9 +88,12 @@
       (hhub-html-page-footer))))
 
 (defun hhub-controller-aboutus-page ()
+  "URL /hhub/aboutuspage。营销介绍页（标题文案虽写 'Contact Us' 实为关于我们）。"
   (with-mvc-ui-page "Nine Stores - Contact Us" #'create-model-withnildata #'create-widgets-for-aboutuspage :role :customer))
 
 (defun create-widgets-for-aboutuspage (modelfunc)
+  "为 About Us 页构建三个 widget：标题/Logo/介绍文案 + 页脚。
+   备注：modelfunc 仅作签名占位，实际不传入数据。"
   (multiple-value-bind () (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -97,9 +128,12 @@
   
 
 (defun hhub-controller-contactus-page ()
+  "URL /hhub/contactuspage。展示 contact us 表单（含 reCAPTCHA v2）。"
   (with-mvc-ui-page "Nine Stores - Contact Us" #'create-model-withnildata #'create-widgets-for-contactuspage :role :customer))
 
 (defun create-widgets-for-contactuspage (modelfunc)
+  "为 Contact Us 页构建表单 widget：firstname/lastname/companyname/email/subject/message
+   + reCAPTCHA + 提交按钮。"
   (multiple-value-bind () (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
@@ -144,9 +178,15 @@
       (list widget1 widget2 widget3))))
 
 (defun hhub-controller-contactus-action ()
+  "URL /hhub/contactusaction（POST）。处理 Contact Us 表单提交并展示致谢页。"
   (with-mvc-ui-page "Thank You For Contacting Us" #'create-model-for-contactusaction #'create-widgets-for-contactusaction :role :customer))
 
 (defun create-model-for-contactusaction ()
+  "Contact Us 提交流程的"模型"：
+     1) 抽参；2) 调 Google reCAPTCHA siteverify 校验；
+     3) 校验通过后 send-contactus-email 发送邮件；
+     4) reCAPTCHA 失败时调 dod-response-captcha-error。
+   返回值：返回一个空 lambda（widget 阶段不再用 model 数据）。"
   (let* ((firstname (hunchentoot:parameter "firstname"))
 	 (lastname (hunchentoot:parameter "lastname"))
 	 (captcha-resp (hunchentoot:parameter "g-recaptcha-response"))
@@ -173,6 +213,7 @@
       (values nil)))))
 
 (defun create-widgets-for-contactusaction (modelfunc)
+  "Contact Us 提交后的致谢页 widgets：Logo + 文案 + 页脚。"
   (multiple-value-bind () (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil)
@@ -189,6 +230,8 @@
 		  
 
 (defun hhub-controller-pricing ()
+  "URL /hhub/pricing。展示 Trial / Basic / Professional 三档套餐对比表。
+   features-active 控制每个特性是否在表中显示；'Y'/'N' 转勾叉，其他原样展示。"
   (let ((names (list  "Trial" "Basic" "Professional"))
 	(prices (list "00" "19,999" "29,999"))
 	(pricing-features 
@@ -224,6 +267,8 @@
       (:div  :class "hhub-footer" (hhub-html-page-footer)))))
 
 (defun format-pricing-features (features features-active)
+  "渲染套餐对比表的 LHS"特性列表"列（仅在 features-active 中为 T 的项展示）。
+   备注：当前 hhub-controller-pricing 已注释掉对本函数的调用，保留供后续使用。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div  :class  "col-md-3"  
 	   (:div  :class  "generic_content clearfix"  
@@ -249,6 +294,11 @@
   
 
 (defun format-pricing-plans (name price plans pricing-features features-active)
+  "渲染单个套餐列。
+   参数：name — 套餐名（Trial/Basic/Professional）；price — 年费；
+         plans — 该套餐每个特性的取值（'Y'/'N'/数字）；
+         pricing-features — 特性名列表；features-active — 对应 T/NIL 显隐。
+   备注：Trial 套餐链接显示 'Sign Up - 90 Days Free!'。"
   (cl-who:with-html-output (*standard-output* nil)
     (:div  :class  "col-md-4"  
      (:div  :class  "generic_content clearfix"  
