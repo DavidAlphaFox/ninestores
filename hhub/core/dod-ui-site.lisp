@@ -1,3 +1,9 @@
+;;; dod-ui-site.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 
@@ -18,7 +24,7 @@
 		    (:hr))
 	      (:div :class "row"
 		    (:div :class "col-lg-12" 
-			  (:p :class "copyright text-muted small" "Copyright &copy; Nine Stores 2025. All Rights Reserved.")))))))
+			  (:p :class "copyright text-muted small" "Copyright &copy; Nine Stores 2026. All Rights Reserved.")))))))
 ;;  (modal-dialog (format nil "hhubcookiepolicy-modal") "Accept Cookies" (modal.hhub-cookie-policy))))
 
 

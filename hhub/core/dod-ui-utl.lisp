@@ -1,7 +1,54 @@
+;;; dod-ui-utl.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
+
+
+;; A simple UI framework within MVC which have these 3 things
+;; 1) Page - a page is html page containing one or more components
+;; 2) Component - a component is a logical UI entity containing more than one widgets.
+;; 3) Widgets - A widget is a leaf node in the page and component hierarchy. The widget contains the
+;; actual HTML, CSS and JAVASCRIPT. 
+
+;; Widget is a function that when called renders HTML/JS/CSS
+(defun make-ui-widget (render-fn)
+  ;; returns a widget structure containing closure
+  (list :type :widget :render render-fn))
+
+(defun render-ui-widget (widget)
+  ;; return closure, not immediate execution
+  (getf widget :render))
+
+;; Component is a collection of widgets or nested components
+(defun make-ui-component (name renderer-fn)
+  "Create a component.
+NAME is a keyword identifier.
+RENDERER-FN is a function that takes MODELFUNC and returns a list of widgets."
+  (list :type :component :name name :renderer renderer-fn))
+
+(defun render-ui-component (component modelfunc)
+  "Render a component by invoking its renderer with MODELFUNC.
+Returns a list of widget outputs."
+  (let* ((renderer (getf component :renderer))
+         (widgets (funcall renderer modelfunc)))
+    (mapcar #'render-ui-widget widgets)))
+
+;; Page is a collection of components
+(defun make-ui-page (persona name &rest components)
+  (list :type :page :persona persona :name name :components components))
+
+(defun render-ui-page (page modelfunc)
+  (mapcan (lambda (component)
+	    (render-ui-component component modelfunc)) (getf page :components)))
+
+
+;;;;;;;;;;;;;;;;;;;; Simple UI Framework ends here ;;;;;;;;;;;;;;;;;;;;
 
 (defun nst-generic-login-with-password (persona formaction redirectonfailure)
   (handler-case 
@@ -17,7 +64,7 @@
 		   :image-src "/img/logo.png"
 		   :image-alt (format nil "~A Login" persona)
 		   :image-style "width: 200px; height: 200px;")
-		(:form :class "form-custsignin" :role "form" :method "POST" :action formaction :data-toggle "validator"
+		(:form :class "form-custsignin" :role "form" :method "POST" :action formaction 
 		       (:div :class "form-group"
 			     (:input :class "form-control" :name "phone" :placeholder "Enter RMN. Ex: 9999999999" :type "number" :required "true"))
 		       (:div :class "form-group"
@@ -53,7 +100,8 @@
 	   :image-alt "Pickup In Store"
 	   :image-style "width: 100px; height: 100px;")
 	(:p (:strong "NOTE: This order needs to be picked up from store."))
-	(:p (:span (cl-who:str (format nil "&nbsp;Store Address:~A" address ))))))))
+	(:p (:span (cl-who:str (format nil "&nbsp;Store Address:~A" address ))))
+	(:div :class "ribbon" "Pickup In Store")))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defun with-html-collapse (collapseid listcollapseitemsfuncs) 
@@ -85,13 +133,19 @@
       (:a :data-bs-toggle "modal" :data-bs-target (format nil "#~A-modal" name)  :href "#" (funcall linkhtmlfunc))
       (modal-dialog-v2 (format nil "~A-modal" name) dialogheadertext (funcall modalfunc)))))
 
-
 (eval-when (:compile-toplevel :load-toplevel :execute)     
-  (defmacro with-html-form-having-submit-event ( form-name form-action  &body body) 
-    :documentation "Arguments: form-action - the form's action, body - any additional hidden form input elements. This macro supports validator.js. Use this macro when you have individual form which needs submit event."  
-    `(cl-who:with-html-output (*standard-output* nil) 
-       (:form :class ,form-name :id (format nil "id~A" ,form-name) :name ,form-name  :method "POST" :action ,form-action :data-toggle "validator" :role "form" :enctype "multipart/form-data" 
-	      ,@body)
+  (defmacro with-html-form-having-submit-event (form-name form-action &body body)
+    :documentation "Updated to support Vanilla JS checkValidity validation"
+    `(cl-who:with-html-output (*standard-output* nil)
+       (:form :class ,form-name 
+              :id (format nil "id~A" ,form-name) 
+              :name ,form-name 
+              :method "POST" 
+              :action ,form-action 
+              :novalidate "novalidate" ;; Prevents default browser bubbles
+              :role "form" 
+              :enctype "multipart/form-data"
+              ,@body)
        (submitformevent-js (format nil "#id~A" ,form-name)))))
 
 
@@ -452,11 +506,10 @@
 		(:script :src "https://ajax.googleapis.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js" :integrity "sha256-lSjKY0/srUM9BE3dPm+c4fBo1dky2v27Gdjm2uoZaL0=" :crossorigin "anonymous")
 		;;(:script :src "/js/spin.min.js")
 		(:script :src "/js/nine-spinner.js")
-		(:script :src "https://www.google.com/recaptcha/api.js")
-		(:script :src "https://cdnjs.cloudflare.com/ajax/libs/1000hz-bootstrap-validator/0.11.9/validator.min.js"))
+		(:script :src "https://www.google.com/recaptcha/api.js"))
 		;; header completes here.
 	        (:body
-		 (:div :class "container-fluid" :id "dod-main-container" :style "background: url(../img/pexels-jess-bailey-designs-965119.jpg) no-repeat center center; background-size: cover;" 
+		 (:div :class "container-fluid" :id "dod-main-container" :style "background: url(../img/pexels-lumn-295771.jpg) no-repeat center center; background-size: cover;" 
 		       (:a :id "scrollup" "" )
 		       (:div :id "hhub-error" :class "hhub-error-alert" :style "display:none;" )
 		       (:div :id "hhub-success" :class "hhub-success-alert" :style "display:none;")
@@ -470,8 +523,6 @@
 		 (:script :src "/js/dod.js"))))))
 
 
-
-
 (eval-when (:compile-toplevel :load-toplevel :execute) 
   (defmacro with-standard-page-template-v2 (title nav-func  &body body)
     `(cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
@@ -481,13 +532,13 @@
 	       (:head
 		(:meta :http-equiv "content-type" 
 		       :content    "text/html;charset=utf-8")
-		(:meta :name "viewport" :content "width=device-width,user-scalable=no")
+		(:meta :name "viewport" :content "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=no")
 		(:meta :name "theme-color" :content "#5382EE")
 		(:meta :names "description" :content "A marketplace app.")
 		(:meta :name "author" :content "Nine Stores")
 		(:link :rel "icon" :href "/favicon.ico")
 		(:title ,title )
-					; Link to the app manifest for PWA. 
+		;; Link to the app manifest for PWA. 
 		(:link :rel "manifest" :href "/manifest.json")
 		;; Bootstrap CSS
 		;;(:link :href "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" :rel "stylesheet")
@@ -504,21 +555,65 @@
 		(:script :src "/js/nine-spinner.js")
 		;;(:script :src "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js")
 		(:script :src "/js/bs5.3/js/bootstrap.bundle.min.js")
-		(:script :src "https://www.google.com/recaptcha/api.js")
-		(:script :src "https://cdnjs.cloudflare.com/ajax/libs/1000hz-bootstrap-validator/0.11.8/validator.min.js"))
-	       ;; header completes here.
-	       (:body
-		(:div :id "dod-main-container" :style "background: url(../img/pexels-jess-bailey-designs-965119.jpg) no-repeat center center; background-size: cover;" 
+		(:script :src "https://www.google.com/recaptcha/api.js"))
+		;; header completes here.
+	       (:body 
+		(:div :id "dod-main-container"
+		      :class "min-h-screen bg-gradient-to-br from-[#0f172a] via-[#1e293b] to-[#3b82f6] d-flex flex-column"
+		      :style "position: relative;"
+		     ;; :style "background: url(../img/pexels-lumn-295771.jpg) no-repeat center center; background-size: cover;" 
 		      (:a :id "scrollup" "" )
 		      (:div :id "hhub-error" :class "hhub-error-alert" :style "display:none;" )
 		      (:div :id "hhub-success" :class "hhub-success-alert" :style "display:none;")
 		      (:div :id "busy-indicator")
 		      ;;(:script :src "/js/hhubbusy.js")
-		      (if hunchentoot:*session* (,nav-func)) 
-		      (:div :class "container" :style "background-color: white; min-height: calc(100vh - 100px);" 
-			    (:div :id "hhubmaincontent"
-				  ,@body))
+		      (if hunchentoot:*session* (,nav-func))
+		      (:div :class "container py-4 bg-light rounded shadow-sm flex-grow-1"
+			    ;;:style "background-color: rgba(255, 255, 255, 0.05);backdrop-filter: blur(4px);min-height: calc(100vh - 100px);"
+		      ,@body)
 		 (:script :src "/js/dod.js")))))))
+
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defmacro with-standard-page-template-v3 (title nav-func &body body)
+    `(cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
+       (:html :lang "en"
+              (:head
+               (:meta :charset "UTF-8")
+	       (:meta :name "viewport" :content "width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=no")
+               (:title ,title)
+               (:link :rel "icon" :href "/favicon.ico")
+	       ;; Link to the app manifest for PWA. 
+	       (:link :rel "manifest" :href "/manifest.json")
+               ;; ✅ Tailwind CSS (CDN)
+               (:script :src "https://cdn.tailwindcss.com")
+	       (:link :href "https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/themes/cupertino/jquery-ui.min.css" :rel "stylesheet")
+	       (:link :href "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" :rel "stylesheet")
+	       (:link :href "https://fonts.googleapis.com/css?family=Merriweather:400,900,900i" :rel "stylesheet")
+	
+
+	       ;; ✅ jQuery (safe fallback for production)
+	       (:script :src "https://code.jquery.com/jquery-3.5.1.min.js" :integrity "sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" :crossorigin "anonymous")
+	       (:script :src "https://ajax.googleapis.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js" :integrity "sha256-lSjKY0/srUM9BE3dPm+c4fBo1dky2v27Gdjm2uoZaL0=" :crossorigin "anonymous")
+	
+	       ;; ✅ Project-wide JS
+	       (:script :src "https://www.google.com/recaptcha/api.js")
+	       (:script :src "/js/nine-spinner.js")
+               ;; Fonts & icons
+               (:link :href "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" :rel "stylesheet")
+               (:link :href "https://fonts.googleapis.com/css?family=Inter:400,500,600&display=swap" :rel "stylesheet"))
+              (:body :class "min-h-screen bg-gradient-to-br from-[#0f172a] via-[#1e293b] to-[#3b82f6] flex flex-col items-center justify-center"
+                     ;;(:div :id "dod-main-container" 
+                     ;; Error/success/busy indicators retained for future transition
+                     (:div :id "hhub-error" :class "hidden bg-red-500 text-white text-center p-2 rounded shadow")
+                     (:div :id "hhub-success" :class "hidden bg-green-500 text-white text-center p-2 rounded shadow")
+                     (:div :id "busy-indicator")
+                     ;; Navigation if session active
+                     (if hunchentoot:*session* (,nav-func))
+                     ;; Main page content
+                     ;;(:main :id "hhubmaincontent" ;;:class "flex-1 container mx-auto p-4"
+                     ,@body
+		     (:script :src "/js/dod.js"))))))
 
 (eval-when (:compile-toplevel :load-toplevel :execute) 
   (defmacro with-standard-page-template-with-sidebar (title nav-func sidebar-func  &body body)
@@ -555,11 +650,9 @@
 		(:script :src "/js/nine-spinner.js")
 		(:script :src "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js")
 		;;(:script :src "/js/bs5.3/js/bootstrap.bundle.min.js")
-		(:script :src "https://www.google.com/recaptcha/api.js")
-		(:script :src "https://cdnjs.cloudflare.com/ajax/libs/1000hz-bootstrap-validator/0.11.8/validator.min.js")
-		) ;; header completes here.
+		(:script :src "https://www.google.com/recaptcha/api.js")) ;; header completes here.
 	       (:body
-		(:div :class "container-fluid" :id "dod-main-container" :style "background: url(../img/pexels-jess-bailey-designs-965119.jpg) no-repeat center center; background-size: cover;" 
+		(:div :class "container-fluid" :id "dod-main-container" :style "background: url(../img/pexels-lumn-295771.jpg) no-repeat center center; background-size: cover;" 
 		       (:a :id "scrollup" "" )
 		       (:div :id "hhub-error" :class "hhub-error-alert" :style "display:none;" )
 		       (:div :id "hhub-success" :class "hhub-success-alert" :style "display:none;" )
@@ -583,9 +676,17 @@
   (defmacro with-standard-customer-page-v2 (title &body body)
     `(with-standard-page-template-v2  ,title with-customer-navigation-bar-v2 ,@body)))
 
+(eval-when (:compile-toplevel :load-toplevel :execute) 
+  (defmacro with-standard-customer-page-v3 (title &body body)
+    `(with-standard-page-template-v3  ,title with-customer-navigation-bar-v2 ,@body)))
+
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-standard-vendor-page-v2 ( title &body body)
     `(with-standard-page-template-v2  ,title with-vendor-navigation-bar-v2  ,@body)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defmacro with-standard-vendor-page-v3 ( title &body body)
+    `(with-standard-page-template-v3  ,title with-vendor-navigation-bar-v2  ,@body)))
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-standard-admin-page-v2 (title &body body)
@@ -690,7 +791,6 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-opr-session-check (&body body)
-    ;;检查是否是超级用户，如果是超级用户，才执行相关逻辑
     `(if (and (verify-superadmin)  hunchentoot:*session*) ,@body 
 					;else 
 	 (hunchentoot:redirect *HHUBOPRLOGINPAGEURL*))))
@@ -704,34 +804,30 @@
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defmacro with-hhub-transaction (name &optional params  &body body)
     :documentation "This is the Policy Enforcement Point for Nine Stores" 
-    `(let* ((transaction
-              (get-ht-val ,name (hhub-get-cached-transactions-ht)))
-	           (uri (cdr (assoc "uri" params :test 'equal)))
-             ;;检查权限是否可以进行操作
-	           (returnlist (has-permission transaction ,params))
-	           (returnvalue (nth 0 returnlist))
-	           (exceptionstr (nth 1 returnlist))
-	           (redirecturl (format nil "/hhub/permissiondenied?message=~A"
-                            (hunchentoot:url-encode "Permission Denied"))))
+    `(let* ((transaction (get-ht-val ,name (hhub-get-cached-transactions-ht)))
+	    (transaction-uri (slot-value transaction 'uri))
+	    (uri (cdr (assoc "uri" params :test 'equal)))
+	    (urimatch-p (uri-prefix-boundary-p transaction-uri uri))
+	    (returnlist (has-permission transaction ,params))
+	    (returnvalue (nth 0 returnlist))
+	    (exceptionstr (nth 1 returnlist))
+	    (redirecturl (format nil "/hhub/permissiondenied?message=~A" (hunchentoot:url-encode "Permission Denied"))))
        (unless transaction
-	       (error 'hhub-abac-transaction-error :errstring
-           (format nil "Did not find the transaction by name ~A. Create a new transaction and a related policy." ,name)))
-       (logiamhere (format nil "In the transaction ~A"
-                     (slot-value transaction 'name)))
-       (logiamhere (format nil "URI -  ~A" uri))
-       (logiamhere (format nil "URI in DB  -  ~A" (slot-value transaction 'uri)))
-       ;; check for returnvalue to be T and the uri to match
-       ;; 检查返回值是真，且事务的uri是匹配的，才可以进行事务操作
-       (if (and returnvalue (>= (search (slot-value transaction 'uri) uri) 0))
-	       ,@body
-	       ;;else
-	       (progn
-	         (logiamhere (format nil "Permission denied for transaction ~A. Error: ~A "
-                         (slot-value transaction 'trans-func) exceptionstr))
-	         ;;(setf (hunchentoot:return-code hunchentoot:*reply*) 500)
-	         (unless returnvalue
-	           (function (lambda ()
-		                     (values redirecturl)))))))))
+	 (error 'hhub-abac-transaction-error :errstring (format nil "Did not find the transaction by name ~A. Create a new transaction and a related policy." ,name)))
+       
+       ;;(logiamhere (format nil "In the transaction ~A" (slot-value transaction 'name)))
+       ;;(logiamhere (format nil "URI -  ~A" uri))
+      ;; (logiamhere (format nil "URI in DB  -  ~A. URI Match is ~A" transaction-uri urimatch-p))
+       ;; check for returnvalue to be T and the uri to match 
+       (if (and returnvalue urimatch-p)
+	   ,@body
+	   ;;else
+	   (progn 
+	     (logiamhere (format nil "Permission denied for transaction ~A. Error: ~A " (slot-value transaction 'trans-func) exceptionstr))
+	     ;;(setf (hunchentoot:return-code hunchentoot:*reply*) 500)
+	     (unless returnvalue
+	       (function (lambda ()
+		 (values redirecturl)))))))))
 
 
 
@@ -890,10 +986,10 @@ individual tiles. It also supports search functionality by including the searchr
 
 (eval-when (:compile-toplevel :load-toplevel :execute)     
   (defmacro with-html-form (form-name form-action  &body body) 
-    :documentation "Arguments: form-action - the form's action, body - any additional hidden form input elements. This macro supports validator.js. To have submit form event for this form create it outside the macro."  
+    :documentation "Arguments: form-action - the form's action, body - any additional hidden form input elements."
     `(let ((formid (format nil "id~A~A" ,form-name (hhub-random-password 3))))
        (cl-who:with-html-output (*standard-output* nil) 
-	 (:form :class ,form-name :id formid :name ,form-name  :method "POST" :action ,form-action :data-toggle "validator" :role "form" :enctype "multipart/form-data" 
+	 (:form :class ,form-name :id formid :name ,form-name  :method "POST" :action ,form-action :novalidate "novalidate" :role "form" :enctype "multipart/form-data" 
 		,@body)))))
 
 
@@ -1138,6 +1234,16 @@ individual tiles. It also supports search functionality by including the searchr
 			   (:div :class "modal-body" ,@body)
 			   (:div :class "modal-footer"
 				 (:button :type "button" :class "btn btn-secondary" :data-bs-dismiss "modal" "Close")))))))))
+
+
+
+
+
+
+
+
+
+
 
 
 

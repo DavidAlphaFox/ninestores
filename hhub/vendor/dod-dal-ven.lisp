@@ -1,3 +1,9 @@
+;;; dod-dal-ven.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -27,6 +33,12 @@
    (payment-api-salt)
    (push-notify-subs-flag)
    (email-add-verified)
+   (legal-name)
+   (trade-name)
+   (pan-number)
+   (gst-state-code)
+   (gst-registration-type)
+   (gst-filing-frequency)
    (company)))
 
 (defclass RequestModelVendorApproval (RequestModel)
@@ -59,6 +71,13 @@
    (payment-api-salt)
    (push-notify-subs-flag)
    (email-add-verified)
+   (legal-name)
+   (trade-name)
+   (pan-number)
+   (gst-state-code)
+   (gst-registration-type)
+   (gst-filing-frequency)
+   (fy-start-month)
    (company)))
   
 (defclass VendorViewModel (ViewModel)
@@ -83,7 +102,14 @@
    (payment-api-key)
    (payment-api-salt)
    (push-notify-subs-flag)
-   (email-add-verified)))
+   (email-add-verified)
+   (legal-name)
+   (trade-name)
+   (pan-number)
+   (gst-state-code)
+   (gst-registration-type)
+   (gst-filing-frequency)
+   (fy-start-month)))
   
 
 (defclass VendorAdapter (AdapterService)
@@ -146,6 +172,13 @@
    (approved-by)
    (approval-status)
    (upi-id)
+   (legal-name)
+   (trade-name)
+   (pan-number)
+   (gst-state-code)
+   (gst-registration-type)
+   (gst-filing-frequency)
+   (fy-start-month)
    (company
     :accessor company
     :initarg :company)))
@@ -201,7 +234,7 @@
     :type (string 256)
     :initarg :city)
    (state
-    :accessor city
+    :accessor state
     :type (string 256)
     :initarg :state)
    (country
@@ -308,10 +341,41 @@
     :type (string 4000)
     :void-value "undefined"
     :initarg :invoice-settings)
+
+   (legal-name
+    :type (string 255)
+    :initarg :legal-name)
+
+   (trade-name
+    :type (string 255)
+    :initarg :trade-name)
+
+   (pan-number
+    :type (string 10)
+    :initarg :pan-number)
+
+   (gst-state-code
+    :type (string 2)
+    :initarg :gst-state-code)
+
+   (gst-registration-type
+    :type (string 20)
+    :void-value "REGULAR"
+    :initarg :gst-registration-type)
+
+   (gst-filing-frequency
+    :type (string 10)
+    :void-value "MONTHLY"
+    :initarg :gst-filing-frequency)
+
+   (fy-start-month
+    :type integer
+    :initarg :fy-start-month)
    
    (tenant-id
     :type integer
     :initarg :tenant-id)
+   
    (COMPANY
     :ACCESSOR get-vendor-company
     :DB-KIND :JOIN

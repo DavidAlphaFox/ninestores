@@ -1,3 +1,9 @@
+;;; dod-ui-prd.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
@@ -61,31 +67,39 @@
 		   (:div :class "product-card" (product-card product  (prdinlist-p (slot-value product 'row-id)  lstshopcart))))))) data )))
 
 (defun product-card-shopcart (product-instance odt-instance)
-    (let* ((prd-name (slot-value product-instance 'prd-name))
-	   (qty-per-unit (slot-value product-instance 'qty-per-unit))
-	   (prdqty (slot-value odt-instance 'prd-qty))
-	   (units-in-stock (slot-value product-instance 'units-in-stock))
-	   (images-str (slot-value product-instance 'prd-image-path))
-	   (imageslst (safe-read-from-string images-str))
-	   (prd-id (slot-value product-instance 'row-id))
-	   (pricewith-discount (calculate-order-item-cost odt-instance))
-	   (company (product-company product-instance))
-	   (currsymbol (get-currency-html-symbol (get-account-currency company)))
-	   (subtotal (* prdqty pricewith-discount)))
-      (cl-who:with-html-output (*standard-output* nil)
-	(:span (cl-who:str (format nil "~A" prdqty)))
-	(:span (:p (:a :href (format nil "prddetailsforcust?id=~A" prd-id) (render-single-product-image prd-name imageslst images-str "70" "50"))))
-	(:span (cl-who:str (format nil "~A: ~A/~A" prd-name pricewith-discount qty-per-unit)))
-	;;(:div (:p  (cl-who:str (format nil "  ~A. Fulfilled By: ~A" qty-per-unit (name prd-vendor)))))
+  (let* ((prd-name (slot-value product-instance 'prd-name))
+	 (qty-per-unit (slot-value product-instance 'qty-per-unit))
+	 (prdqty (slot-value odt-instance 'prd-qty))
+	 (units-in-stock (slot-value product-instance 'units-in-stock))
+	 (images-str (slot-value product-instance 'prd-image-path))
+	 (imageslst (safe-read-from-string images-str))
+	 (prd-id (slot-value product-instance 'row-id))
+	 (current-price (slot-value product-instance 'current-price))
+	 (current-discount (slot-value product-instance 'current-discount))
+	 (uom (slot-value product-instance 'unit-of-measure))
+	 (pricewith-discount (calculate-order-item-cost odt-instance))
+	 (company (product-company product-instance))
+	 (currsymbol (get-currency-html-symbol (get-account-currency company)))
+	 (subtotal (* prdqty pricewith-discount)))
+    (cl-who:with-html-output (*standard-output* nil)
+      (with-html-div-col-2
+	(:span (:a :href (format nil "prddetailsforcust?id=~A" prd-id) (render-single-product-image prd-name imageslst images-str "70" "50"))))
+      (with-html-div-col-2
+	(:span (cl-who:str (format nil "~A: ~A/~A ~A" prd-name current-price qty-per-unit uom))))
+      (with-html-div-col-2
+	(:span (cl-who:str (format nil "~A" prdqty))))
+      (with-html-div-col-1
+	(:span (cl-who:str (format nil "~d%" current-discount))))
+      ;;(:div (:p  (cl-who:str (format nil "  ~A. Fulfilled By: ~A" qty-per-unit (name prd-vendor)))))
+      (with-html-div-col-2
 	(:div
 	 (:span (:p (:span :class "label label-success" (cl-who:str (format nil "~A ~$" currsymbol subtotal)))))
 	 (:span 
 	  (:a  :data-bs-toggle "modal" :data-bs-target (format nil "#producteditqty-modal~A" prd-id) :data-toggle "tooltip" :title "Modify"  :href "#" :onclick "addtocartclick(this.id);" :id (format nil "btnaddproduct_~A" prd-id) :name (format nil "btnaddproduct~A" prd-id) (:i :style "width: 15px; height: 15px; font-size: 20px;" :class "fa-regular fa-pen-to-square") "&nbsp;&nbsp;")
 	  (modal-dialog-v2 (format nil "producteditqty-modal~A" prd-id) (cl-who:str (format nil "Edit Product Quantity - Available: ~A" units-in-stock)) (product-qty-edit-html product-instance odt-instance)))
-
 	 (:span 
 	  (:a  :data-bs-toggle "modal" :data-bs-target (format nil "#productremoveshopcart-modal~A" prd-id) :data-toggle "tooltip" :title "Remove From Shopcart"  :href "#" :id (format nil "btnremoveproduct_~A" prd-id) :name (format nil "btnremoveproduct~A" prd-id) (:i :style "width: 15px; height: 15px; font-size: 20px;" :class "fa-solid fa-trash-can") "&nbsp;&nbsp;")
-	  (modal-dialog-v2 (format nil "productremoveshopcart-modal~A" prd-id) (cl-who:str (format nil "Remove Product From Shopcart"))  (modal.product-remove-from-shopcart product-instance)))))))
+	  (modal-dialog-v2 (format nil "productremoveshopcart-modal~A" prd-id) (cl-who:str (format nil "Remove Product From Shopcart"))  (modal.product-remove-from-shopcart product-instance))))))))
 
 (defun modal.product-remove-from-shopcart (product)
   (let* ((id (slot-value product 'row-id))
@@ -131,14 +145,23 @@
 	 (prdqty (slot-value odt-instance 'prd-qty))
 	 (images-str (slot-value product-instance 'prd-image-path))
 	 (imageslst (safe-read-from-string images-str))
-	 (subtotal (calculate-order-item-cost odt-instance))
+	 (sgstrate (slot-value odt-instance 'sgst))
+	 (sgstamt (slot-value odt-instance 'sgstamt))
+	 (cgstrate (slot-value odt-instance 'cgst))
+	 (cgstamt (slot-value odt-instance 'cgstamt))
+	 (igstrate (slot-value odt-instance 'igst))
+	 (igstamt (slot-value odt-instance 'igstamt))
+	 (taxablevalue (slot-value odt-instance 'taxablevalue))
 	 (company (product-company product-instance))
 	 (currsymbol (get-currency-html-symbol (get-account-currency company)))) 
     (cl-who:with-html-output (*standard-output* nil)
-       (:a :href "#" (render-single-product-image prd-name imageslst images-str "83" "100"))
-       (:p  (cl-who:str (format nil "~A-~A" prd-name qty-per-unit)))
-       (:p  (cl-who:str (format nil "~A" prdqty )))
-       (:div :class "txt-bg-success p3" (cl-who:str (format nil "~A ~$"  currsymbol subtotal))))))
+      (:a :href "#" (render-single-product-image prd-name imageslst images-str "83" "100"))
+      (:p  (cl-who:str (format nil "~A-~A" prd-name qty-per-unit)))
+      (:p (cl-who:str (format nil "~A ~d @ ~d%" currsymbol sgstamt sgstrate)))
+      (:p (cl-who:str (format nil "~A ~d @ ~d%" currsymbol cgstamt cgstrate)))
+      (:p (cl-who:str (format nil "~A ~d @ ~d%" currsymbol igstamt igstrate)))
+      (:p  (cl-who:str (format nil "~A" prdqty )))
+      (:div :class "txt-bg-success p3" (cl-who:str (format nil "~A ~$"  currsymbol taxablevalue))))))
 
 
 
@@ -187,7 +210,7 @@
 	     (:div  :class "form-group"
 		    (:label :for "description" "Description")
 		    (text-editor-control idtextarea  description))
-	     (:textarea :style "display: block;" :id idtextarea :class "form-control" :name "description"  :placeholder "Enter Product Description ( max 2000 characters) "  :rows "5" :onkeyup (format nil "countChar(~A.id, this, 2000)" charcountid1) (cl-who:str (format nil "~A" description)))
+	     (:textarea :style "display: block;" :id idtextarea :class "form-control" :name "description"  :placeholder "Enter Product Description (max 5000 characters) "  :rows "5" :onkeyup (format nil "countChar(~A.id, this, 5000)" charcountid1) (cl-who:str (format nil "~A" description)))
 	     (:div :class "form-group" :id charcountid1 )
 	     (:div :class "form-group"
 		   (with-html-input-text "hsn-code" "HSN/SAC Code" "HSN/SAC Code" hsncode T "Enter HSN/SAC Code" 4))
@@ -376,6 +399,8 @@
   (let* ((prd-id (slot-value product-instance 'row-id))
 	 (active-flag (slot-value product-instance 'active-flag))
 	 (external-url (slot-value product-instance 'external-url))
+	 (prd-type (slot-value product-instance 'prd-type))
+	 (prdisservice-p (if (equal prd-type "SERV") T NIL))
 	 (shipping-weight-kg (slot-value product-instance 'shipping-weight-kg))
 	 (company (product-company product-instance))
 	 (currency (get-account-currency company))
@@ -411,15 +436,16 @@
 	  (cl-who:htm
 	   (with-html-div-col-1  :data-bs-toggle "tooltip" :title "Copy External URL" 
 	     (:a :href "#" :OnClick (parenscript:ps (copy-to-clipboard (parenscript:lisp external-url))) (:i :class  "fa-solid fa-share-nodes")))))
-	
-	    (with-html-div-col-1  :data-bs-toggle "tooltip" :title "Shipping" 
-	      (if (and shipping-weight-kg (> shipping-weight-kg 0)) 
-		  (cl-who:htm
-		   (:a :data-bs-toggle "modal" :data-bs-target (format nil "#dodprodshipping-modal~A" prd-id)  :href "#"  (:i :class "fa-solid fa-truck")))
-		  ;;else
-		  (cl-who:htm
-		   (:a :style "color:red;" :data-bs-toggle "modal" :data-bs-target (format nil "#dodprodshipping-modal~A" prd-id)  :href "#"  (:i :class "fa-solid fa-truck"))))
-	      (modal-dialog-v2 (format nil "dodprodshipping-modal~A" prd-id) "Shipping" (modal.vendor-product-shipping-html product-instance "EDIT")))
+	(with-html-div-col-1  :data-bs-toggle "tooltip" :title "Shipping" 
+	  (unless prdisservice-p ;; Display the shipping truck for SALE product type only. 
+	    (if (and shipping-weight-kg (> shipping-weight-kg 0)) 
+		(cl-who:htm
+		 (:a :data-bs-toggle "modal" :data-bs-target (format nil "#dodprodshipping-modal~A" prd-id)  :href "#"  (:i :class "fa-solid fa-truck")))
+		;;else
+		(cl-who:htm
+		 (:a :style "color:red;" :data-bs-toggle "modal" :data-bs-target (format nil "#dodprodshipping-modal~A" prd-id)  :href "#"  (:i :class "fa-solid fa-truck"))))
+	    (modal-dialog-v2 (format nil "dodprodshipping-modal~A" prd-id) "Shipping" (modal.vendor-product-shipping-html product-instance "EDIT"))))
+	    
 	(with-html-div-col-1  :data-bs-toggle "tooltip" :title "Discounts" 
 		(if product-pricing 
 		    (cl-who:htm
@@ -563,40 +589,74 @@
     
 (defun product-card (product-instance prdincart-p)
   (let* ((prd-name (slot-value product-instance 'prd-name))
-	 (images-str (slot-value product-instance 'prd-image-path))
-	 (imageslst (safe-read-from-string images-str))
-	 (units-in-stock (slot-value product-instance 'units-in-stock))
-	 (prd-id (slot-value product-instance 'row-id))
-	 (subscribe-flag (slot-value product-instance 'subscribe-flag))
-	 (customer-type (get-login-customer-type))
-	 (company (product-company product-instance))
-	 (subscription-plan (slot-value company 'subscription-plan))
-	 (cmp-type (slot-value company 'cmp-type))
-	 (product-pricing (select-product-pricing-by-product-id prd-id company)))
-      (cl-who:with-html-output (*standard-output* nil)
-	(:a :href (format nil "prddetailsforcust?id=~A" prd-id) (render-single-product-image prd-name imageslst images-str "100" "83"))
-	(:div :class "product-details"
-	      (product-price-with-discount-widget product-instance product-pricing)
-	      (:p :class "product-title" (:a :href (format nil "prddetailsforcust?id=~A" prd-id) (cl-who:str prd-name)))
-	      ;; Display the subscribe button only for standard customers.
-	      ;; Customers of APARTMENT/COMMUNITY do not have this feature. 
-	      (when (and
-		     (com-hhub-attribute-company-prdsubs-enabled subscription-plan cmp-type) 
-		     (equal subscribe-flag "Y") 
-		     (equal customer-type "STANDARD"))
-		(cl-who:htm
-		 (:button :data-bs-toggle "modal" :data-bs-target (format nil "#productsubscribe-modal~A" prd-id)  :href "#"   :class "btn btn-sm btn-primary" :id (format nil "btnsubscribe~A" prd-id) :name (format nil "btnsubscribe~A" prd-id)  (:i :class "fa-solid fa-hand-point-up") "&nbsp;Subscribe")
-		 (modal-dialog-v2 (format nil "productsubscribe-modal~A" prd-id) "Subscribe Product/Service" (product-subscribe-html prd-id))))
-	      (if  prdincart-p 
-		   (cl-who:htm (:a :class "btn btn-sm btn-success" :role "button"  :onclick "return false;" :href (format nil "javascript:void(0);")(:i :class "fa-solid fa-check")))
-		   ;; else 
-		   (if (and units-in-stock (> units-in-stock 0))
-		       (cl-who:htm (:button  :data-bs-toggle "modal" :data-bs-target (format nil "#producteditqty-modal~A" prd-id)  :href "#"   :class "add-to-cart-btn" :onclick "addtocartclick(this.id);" :id (format nil "btnaddproduct_~A" prd-id) :name (format nil "btnaddproduct~A" prd-id)  "Add&nbsp; " (:i :class "fa-solid fa-plus"))
-				   (modal-dialog-v2 (format nil "producteditqty-modal~A" prd-id) (cl-who:str (format nil "Edit Product Quantity - Available: ~A" units-in-stock)) (product-qty-add-html product-instance product-pricing)))
-		       ;; else
-		       (cl-who:htm
-			(:div :class "col-6" 
-			      (:h5 (:span :class "label label-danger" "Out Of Stock"))))))))))
+         (images-str (slot-value product-instance 'prd-image-path))
+         (imageslst (safe-read-from-string images-str))
+         (units-in-stock (slot-value product-instance 'units-in-stock))
+         (prd-id (slot-value product-instance 'row-id))
+         (subscribe-flag (slot-value product-instance 'subscribe-flag))
+         (customer-type (get-login-customer-type))
+         (company (product-company product-instance))
+         (subscription-plan (slot-value company 'subscription-plan))
+         (cmp-type (slot-value company 'cmp-type))
+         (product-pricing (select-product-pricing-by-product-id prd-id company)))
+    (cl-who:with-html-output (*standard-output* nil)
+      ;; ⬇️ Outer tile wrapper
+      ;; Product image section
+      (:a :href (format nil "prddetailsforcust?id=~A" prd-id)
+          (render-single-product-image prd-name imageslst images-str "100" "83"))
+      ;; Product details section
+      (:div :class "product-details"
+            ;; price section
+            (product-price-with-discount-widget product-instance product-pricing)
+            ;; product title
+            (:p :class "product-title"
+                (:a :href (format nil "prddetailsforcust?id=~A" prd-id)
+		    (cl-who:str (if (> (length prd-name) 20)  (subseq prd-name  0 20) prd-name))))
+            ;; subscription button (if eligible)
+            (when (and
+                   (com-hhub-attribute-company-prdsubs-enabled subscription-plan cmp-type)
+                   (equal subscribe-flag "Y")
+                   (equal customer-type "STANDARD"))
+              (cl-who:htm
+               (:button :data-bs-toggle "modal"
+                        :data-bs-target (format nil "#productsubscribe-modal~A" prd-id)
+                        :class "btn btn-sm btn-primary"
+                        :id (format nil "btnsubscribe~A" prd-id)
+                        :name (format nil "btnsubscribe~A" prd-id)
+			(:i :class "fa-solid fa-hand-point-up")
+			" Subscribe")
+               (modal-dialog-v2 (format nil "productsubscribe-modal~A" prd-id)
+                                "Subscribe Product/Service"
+                                (product-subscribe-html prd-id))))
+            ;; add-to-cart / already-in-cart / out-of-stock logic
+            (cond
+              (prdincart-p
+               (cl-who:htm
+                (:a :class "btn btn-sm btn-success"
+                    :role "button"
+                    :onclick "return false;"
+                    :href "javascript:void(0);"
+                    (:i :class "fa-solid fa-check")
+                    " In Cart")))
+	      
+              ((and units-in-stock (> units-in-stock 0))
+               (cl-who:htm
+                (:button :data-bs-toggle "modal"
+                         :data-bs-target (format nil "#producteditqty-modal~A" prd-id)
+                         :class "btn btn-sm btn-outline-primary add-to-cart-btn"
+                         :onclick "addtocartclick(this.id);"
+                         :id (format nil "btnaddproduct_~A" prd-id)
+                         :name (format nil "btnaddproduct~A" prd-id)
+                         "Add "
+                         (:i :class "fa-solid fa-plus"))
+                (modal-dialog-v2
+                 (format nil "producteditqty-modal~A" prd-id)
+                 (format nil "Edit Product Quantity - Available: ~A" units-in-stock)
+                 (product-qty-add-html product-instance product-pricing))))
+              (t
+               (cl-who:htm
+                (:div :class "text-danger small fw-bold mt-2"
+                      "Out of Stock"))))))))
   
 (defun product-card-with-details-for-customer (product-instance customer  prdincart-p)
   (let* ((prd-name (slot-value product-instance 'prd-name))
@@ -660,9 +720,6 @@
 				(:a :id "idshareexturl" :href "#" (:i :class  "fa-solid fa-arrow-up-from-bracket")))
 			 (sharetextorurlonclick "#idshareexturl" (parenscript:lisp external-url)))))))))))
 
-(defun product-card-with-details-for-customer2 (proddetailpagetempl)
-  (cl-who:with-html-output (*standard-output* nil)
-    (cl-who:str proddetailpagetempl)))
     
 (defun render-multiple-product-images (prd-name imageslst images-str)
   :description "Sometimes we store the product image as a list of strings when we want multiple images. other times we store them as a string for backward compatibility reasons"

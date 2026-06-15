@@ -1,3 +1,9 @@
+;;; dod-bl-bo.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -101,18 +107,25 @@
 
 (defun select-bus-trans-by-company (company-instance)
   (let ((tenant-id (slot-value company-instance 'row-id)))
- (clsql:select 'dod-bus-transaction  :where
-		[and [= [:deleted-state] "N"]
-		[= [:tenant-id] tenant-id]]
-     :caching *dod-database-caching* :flatp t )))
+    (clsql:select 'dod-bus-transaction  :where
+		  [and [= [:deleted-state] "N"]
+		  [= [:tenant-id] tenant-id]]
+		  :caching *dod-database-caching* :flatp t )))
 
 (defun select-bus-trans-by-name (name-like-clause company-instance )
-      (let ((tenant-id (slot-value company-instance 'row-id)))
+  (let ((tenant-id (slot-value company-instance 'row-id)))
   (car (clsql:select 'dod-bus-transaction :where [and
-		[= [:deleted-state] "N"]
-		[= [:tenant-id] tenant-id]
-		[like  [:name] name-like-clause]]
-		:caching *dod-database-caching* :flatp t))))
+		     [= [:deleted-state] "N"]
+		     [= [:tenant-id] tenant-id]
+		     [like  [:name] name-like-clause]]
+					  :caching *dod-database-caching* :flatp t))))
+(defun select-bus-trans-by-id (id company-instance )
+  (let ((tenant-id (slot-value company-instance 'row-id)))
+  (car (clsql:select 'dod-bus-transaction :where [and
+		     [= [:deleted-state] "N"]
+		     [= [:tenant-id] tenant-id]
+		     [like  [:row-id] id]]
+					  :caching *dod-database-caching* :flatp t))))
 
 (defun update-bus-transaction (instance); This function has side effect of modifying the database record.
   (clsql:update-records-from-instance instance))
@@ -179,7 +192,7 @@
 	(multiple-value-bind (returnvalues)
 	    (funcall (intern  (string-upcase policy-func) :nstores) params)
 	  ;; Return a list of return values and exception as nil. 
-	  (logiamhere (format nil "Executing Policy - ~A" policy-func))
+	  ;;(logiamhere (format nil "Executing Policy - ~A" policy-func))
 	  (list returnvalues nil))
 
       ;; If we get an ABAC Transaction exception
@@ -200,6 +213,6 @@
 				:if-exists :append
 				:if-does-not-exist :create)
 	  (format stream "~A: ~A~A" (mysql-now)  exceptionstr (sb-debug:list-backtrace)))
-	(list nil (format nil "Nind Stores General Authorization Error. Contact your system administrator."))))))
+	(list nil (format nil "Nine Stores General Authorization Error. Contact your system administrator."))))))
 
 

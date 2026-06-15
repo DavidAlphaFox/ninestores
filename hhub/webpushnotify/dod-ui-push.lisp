@@ -1,3 +1,9 @@
+;;; dod-ui-push.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -103,7 +109,8 @@
 (defun hhub-remove-vendor-push-subscription ()
   (let* ((vendor (get-login-vendor))
 	 (requestmodel (make-instance 'RequestDeleteWebPushNotifyVendor
-				      :vendor vendor))
+				      :vendor vendor
+				      :company (get-login-vendor-company)))
 	 (webpushadapter (make-instance 'VendorWebPushNotifyAdapter)))
     (processdeleterequest webpushadapter requestmodel)))
 

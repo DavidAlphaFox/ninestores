@@ -2,7 +2,7 @@
 ;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: CL-USER; Base: 10 -*-
 ;;; $Header: hhub.asd,v 1.6 2016/06/26 18:31:03 
 
-;;; Copyright (c) 2016-2025, Nine Technologies.  All rights reserved.
+;;; Copyright (c) 2016-2026, Nine Technologies.  All rights reserved.
 
 ;;; Redistribution and use in source and binary forms, with or without
 ;;; modification, are permitted provided that the following conditions
@@ -74,6 +74,14 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS"
    (:file "core/nst-sch-mig")
    (:file "core/dod-ini-sys")
    (:file "core/dod-ui-site")
+   (:file "core/nst-mult-logic")
+   (:file "core/nst-bl-beltrusys")
+   (:file "core/nst-bl-conflodis")
+   (:file "core/nst-ui-prosymloo")
+   (:file "core/nst-bl-funloodat")
+   (:file "core/nst-bl-ollama")
+   (:file "core/nst-dal-pincodes")
+   (:file "core/nst-bl-pincodes")
  ;; Account
    (:file "account/dod-dal-cmp")
    (:file "account/dod-bl-cmp")
@@ -83,7 +91,11 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS"
    (:file "customer/dod-dal-cus")
    (:file "customer/dod-bl-cus")
    (:file "customer/dod-ui-cus")
-   
+   (:file "customer/nst-ui-cuswall")
+   (:file "customer/nst-ui-prodetpag")
+   (:file "customer/nst-dal-Customer")
+   (:file "customer/nst-bl-Customer")
+   (:file "customer/nst-ui-Customer")
    ;; Email
    (:file "email/templates/registration")
 
@@ -94,6 +106,9 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS"
    (:file "invoice/nst-bl-itm")
    (:file "invoice/nst-ui-ihd")
    (:file "invoice/nst-ui-itm")
+   (:file "invoice/nst-dal-cusinvreg")
+   (:file "invoice/nst-bl-cusinvreg")
+   (:file "invoice/nst-ui-cusinvreg")
    (:file "invoice/templates/invoicesettings")
    
    ;; Order

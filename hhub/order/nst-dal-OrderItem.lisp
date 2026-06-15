@@ -1,22 +1,28 @@
+;;; nst-dal-OrderItem.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 
 
-(defclass OrderItemsAdapter (AdapterService)
+(defclass OrderItemAdapter (AdapterService)
   ())
 
-(defclass OrderItemsDBService (DBAdapterService)
+(defclass OrderItemDBService (DBAdapterService)
   ())
 
-(defclass OrderItemsPresenter (PresenterService)
+(defclass OrderItemPresenter (PresenterService)
   ())
 
-(defclass OrderItemsService (BusinessService)
+(defclass OrderItemService (BusinessService)
   ())
-(defclass OrderItemsHTMLView (HTMLView)
+(defclass OrderItemHTMLView (HTMLView)
   ())
 
-(defclass OrderItemsViewModel (ViewModel)
+(defclass OrderItemViewModel (ViewModel)
   ((row-id
     :initarg :row-id
     :accessor row-id)
@@ -38,6 +44,22 @@
    (disc-rate
     :initarg :disc-rate
     :accessor disc-rate)
+   (taxablevalue
+    :initarg :taxablevalue
+    :accessor taxablevalue)
+   (cgstamt
+    :initarg :cgstamt
+    :accessor cgstamt)
+   (sgstamt
+    :initarg :sgstamt
+    :accessor sgstamt)
+   (igstamt
+    :initarg :igstamt
+    :accessor igstamt)
+   (totalitemval
+    :initarg :totalitemval
+    :accessor totalitemval)
+
    (cgst
     :initarg :cgst
     :accessor cgst)
@@ -66,7 +88,7 @@
     :initarg :company
     :accessor company)))
 
-(defclass OrderItemsResponseModel (ResponseModel)
+(defclass OrderItemResponseModel (ResponseModel)
   ((row-id
     :initarg :row-id
     :accessor row-id)
@@ -88,6 +110,22 @@
    (disc-rate
     :initarg :disc-rate
     :accessor disc-rate)
+   (taxablevalue
+    :initarg :taxablevalue
+    :accessor taxablevalue)
+   (cgstamt
+    :initarg :cgstamt
+    :accessor cgstamt)
+   (sgstamt
+    :initarg :sgstamt
+    :accessor sgstamt)
+   (igstamt
+    :initarg :igstamt
+    :accessor igstamt)
+   (totalitemval
+    :initarg :totalitemval
+    :accessor totalitemval)
+
    (cgst
     :initarg :cgst
     :accessor cgst)
@@ -117,7 +155,7 @@
     :accessor company)))
    
 
-(defclass OrderItemsRequestModel (RequestModel)
+(defclass OrderItemRequestModel (RequestModel)
   ((row-id
     :initarg :row-id
     :accessor row-id)
@@ -139,6 +177,22 @@
    (disc-rate
     :initarg :disc-rate
     :accessor disc-rate)
+   (taxablevalue
+    :initarg :taxablevalue
+    :accessor taxablevalue)
+   (cgstamt
+    :initarg :cgstamt
+    :accessor cgstamt)
+   (sgstamt
+    :initarg :sgstamt
+    :accessor sgstamt)
+   (igstamt
+    :initarg :igstamt
+    :accessor igstamt)
+   (totalitemval
+    :initarg :totalitemval
+    :accessor totalitemval)
+
    (cgst
     :initarg :cgst
     :accessor cgst)
@@ -168,10 +222,10 @@
     :accessor company)))
 
 
-(defclass OrderItemsSearchRequestModel (OrderItemsRequestModel)
+(defclass OrderItemSearchRequestModel (OrderItemRequestModel)
   ())
 
-(defclass OrderItems (BusinessObject)
+(defclass OrderItem (BusinessObject)
   ((row-id
     :initarg :row-id
     :accessor row-id)
@@ -193,6 +247,22 @@
    (disc-rate
     :initarg :disc-rate
     :accessor disc-rate)
+   (taxablevalue
+    :initarg :taxablevalue
+    :accessor taxablevalue)
+   (cgstamt
+    :initarg :cgstamt
+    :accessor cgstamt)
+   (sgstamt
+    :initarg :sgstamt
+    :accessor sgstamt)
+   (igstamt
+    :initarg :igstamt
+    :accessor igstamt)
+   (totalitemval
+    :initarg :totalitemval
+    :accessor totalitemval)
+
    (cgst
     :initarg :cgst
     :accessor cgst)
@@ -220,132 +290,202 @@
    (company
     :initarg :company
     :accessor company)))
+
 
 (clsql:def-view-class dod-order-items ()
   ((row-id
     :db-kind :key
     :db-constraints :not-null
+    :column "ROW_ID"
     :type integer
     :initarg :row-id)
-   
+
+   ;; --- Relationships (Joins) ---
    (order-id
-    :accessor odt-order-id
-    :TYPE integer
+    :type integer
+    :column "ORDER_ID"
+    :db-constraints :not-null
     :initarg :order-id)
-   (orderobject 
-    :accessor odt-orderobject 
+   (order
+    :accessor get-order
     :db-kind :join
     :db-info (:join-class dod-order
-	      :home-key order-id 
-	      :foreign-key row-id
-		       :set nil))
+              :home-key order-id
+              :foreign-key row-id
+              :set nil))
+
+   (vendor-id
+    :type integer
+    :column "VENDOR_ID"
+    :db-constraints :not-null
+    :initarg :vendor-id)
+   ;; Join to dod-vend-profile would go here
+   (vendor
+    :accessor get-vendor 
+    :db-kind :join
+    :db-info (:join-class doe-vend-profile
+              :home-key order-id
+              :foreign-key row-id
+              :set nil))
    
    (prd-id
-    :accessor odt-prd-id
-    :DB-CONSTRAINTS :NOT-NULL
-    :TYPE integer
-    :initarg :prd-id)
-   
-   (productobject
-    :ACCESSOR get-odt-product
-    :db-kind :join
-    :db-info (:join-class dod-prd-master
-	      :home-key prd-id
-	      :foreign-key row-id
-	      :set nil))
-
-   
-   
-   (vendor-id
-    :accessor odt-vendor-id
-    :db-constraints :NOT-NULL
     :type integer
-    :initarg :vendor-id)
-   
-   (vendorobject
-    :accessor odt-vendorobject
-    :db-kind :join
-    :db-info (:join-class dod-vend-profile
-	      :home-key vendor-id
-	      :foreign-key row-id
-	      :set nil))
-   
+    :column "PRD_ID"
+    :db-constraints :not-null
+    :initarg :prd-id)
+   ;; Join to dod-product would go here
+   (product
+    :ACCESSOR get-item-product
+    :DB-KIND :JOIN
+    :DB-INFO (:JOIN-CLASS dod-prd-master
+	                  :HOME-KEY prd-id
+                          :FOREIGN-KEY row-id
+                          :SET NIL))
 
-   
+   ;; --- Product & Catalog Details ---
+   (hsn-code
+    :type (string 8)
+    :column "HSN_CODE"
+    :initarg :hsn-code)
+   (sac-code
+    :type (string 8)
+    :column "SAC_CODE"
+    :initarg :sac-code)
+   (item-description
+    :type (string 500)
+    :column "ITEM_DESCRIPTION"
+    :initarg :item-description)
+   (uqc
+    :type (string 10)
+    :column "UQC"
+    :initarg :uqc)
+
+   ;; --- Basic Pricing & Quantity ---
+   (unit-price
+    :type float
+    :column "UNIT_PRICE"
+    :initarg :unit-price)
+   (mrp
+    :type float
+    :column "MRP"
+    :initarg :mrp)
    (prd-qty
-    :accessor odt-product-qty
-    :DB-CONSTRAINTS :NOT-NULL
-    :TYPE integer
+    :type integer
+    :column "PRD_QTY"
     :initarg :prd-qty)
 
-   
-   (unit-price
-    :accessor get-unit-price
-    :db-constraints :not-null
-    :type float
-    :initarg :unit-price)
-
+   ;; --- Tax & Discount Rates (%) ---
    (cgst
-    :accessor cgst
     :type float
-    :initarg :cgst)
-
+    :column "CGST"
+    :initarg :cgst-rate)
    (sgst
-    :accessor sgst
     :type float
-    :initarg :sgst)
-
+    :column "SGST"
+    :initarg :sgst-rate)
    (igst
-    :accessor igst
     :type float
-    :initarg :igst)
-
+    :column "IGST"
+    :initarg :igst-rate)
+   (cess-rate
+    :type float
+    :column "CESS_RATE"
+    :initarg :cess-rate)
    (disc-rate
-    :accessor disc-rate
     :type float
+    :column "DISC_RATE"
     :initarg :disc-rate)
-
    (addl-tax1-rate
-    :accessor addl-tax1-rate
     :type float
+    :column "ADDL_TAX1_RATE"
     :initarg :addl-tax1-rate)
 
-   (comments
-    :accessor comments
-    :type (string 250)
-    :initarg :comments)
-   
+   ;; --- Calculated Amounts ---
+   (discount-amount
+    :type float
+    :column "DISCOUNT_AMOUNT"
+    :initarg :discount-amount)
+   (cgstamt
+    :type float
+    :column "CGSTAMT"
+    :accessor cgstamt
+    :initarg :cgstamt)
+   (sgstamt
+    :type float
+    :column "SGSTAMT"
+    :accessor sgstamt 
+    :initarg :sgstamt)
+   (igstamt
+    :type float
+    :column "IGSTAMT"
+    :accessor igstamt 
+    :initarg :igstamt)
+   (cess-amount
+    :type float
+    :column "CESS_AMOUNT"
+    :initarg :cess-amount)
+   (taxablevalue
+    :type float
+    :column "TAXABLEVALUE"
+    :initarg :taxablevalue)
+   (totalitemval
+    :type float
+    :column "TOTALITEMVAL"
+    :initarg :totalitemval)
+
+   ;; --- Status & Compliance ---
    (fulfilled
-    :type (string 1)
-    :void-value "N"
+    :type (string 1) ; 'Y'/'N'
+    :column "FULFILLED"
     :initarg :fulfilled)
-   
-
-   (status 
-    :accessor odt-status
-    :DB-CONSTRAINTS :NOT-NULL
-    :TYPE (string 3)
+   (status
+    :type (string 3)
+    :column "STATUS"
     :initarg :status)
-   
-   
-   (deleted-state
-    :type (string 1)
-    :void-value "N"
-    :initarg :deleted-state)
+   (itc-eligible
+    :type (string 10) ; enum('ELIGIBLE','INELIGIBLE','BLOCKED')
+    :column "ITC_ELIGIBLE"
+    :initarg :itc-eligible)
+   (comments
+    :type (string 255)
+    :column "COMMENTS"
+    :initarg :comments)
 
-    (tenant-id
+   ;; --- Audit & Meta ---
+   (tenant-id
     :type integer
+    :column "TENANT_ID"
     :initarg :tenant-id)
-   (COMPANY
-    :ACCESSOR customer-company
+   (company
+    :ACCESSOR get-company
     :DB-KIND :JOIN
     :DB-INFO (:JOIN-CLASS dod-company
-	      :HOME-KEY tenant-id
+	                  :HOME-KEY tenant-id
                           :FOREIGN-KEY row-id
-                          :SET nil)))
+                          :SET NIL))
+   (deleted-state
+    :type (string 1)
+    :column "DELETED_STATE"
+    :initarg :deleted-state)
+      ;; AUDIT FIELDS
+   (created
+    :accessor created
+    :type (string 30)
+    :initarg :created
+    :db-kind :base)
+   (updated
+    :accessor updated
+    :type (string 30)
+    :initarg :updated
+    :db-kind :base))
+  (:base-table "DOD_ORDER_ITEMS"))
 
-   
-  (:BASE-TABLE dod_order_items))
+
+
+
+
+
+
 
 
 

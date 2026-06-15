@@ -1,3 +1,9 @@
+;;; nst-bl-Order.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-%
 (in-package :nstores)
 
@@ -406,3 +412,32 @@
       (setf company (slot-value source 'company))
       destination)))
  
+(defun calculate-order-totalgst (order orderitems vendor)
+  (let ((placeofsupply (string-upcase (slot-value vendor 'state)))
+	(statecode (string-upcase (slot-value order 'shipstate))))
+    (if (equal placeofsupply statecode)
+	(+ (calculate-order-totalcgst orderitems) (calculate-order-totalsgst orderitems))
+	;;else
+	(calculate-order-totaligst orderitems))))
+
+(defun calculate-order-totalcgst (orderitems)
+  (reduce #'+ (mapcar (lambda (item) (slot-value item 'cgstamt)) orderitems)))
+
+(defun calculate-order-totalsgst (orderitems)
+  (reduce #'+ (mapcar (lambda (item) (slot-value item 'sgstamt)) orderitems)))
+
+(defun calculate-order-totaligst (orderitems)
+  (reduce #'+ (mapcar (lambda (item) (slot-value item 'igstamt)) orderitems)))
+
+
+(defun calculate-order-totalbeforetax (orderitems)
+  (fround (reduce #'+ (mapcar (lambda (item) (slot-value item 'taxablevalue)) orderitems))))
+
+(defun calculate-order-totalaftertax (orderitems)
+  (fround (reduce #'+ (mapcar (lambda (item)
+				(let* ((cgstamt (slot-value item 'cgstamt))
+				       (sgstamt (slot-value item 'sgstamt))
+				       (igstamt (slot-value item 'igstamt))
+				       (taxablevalue (slot-value item 'taxablevalue)))
+				  (+ taxablevalue sgstamt cgstamt igstamt))) orderitems))))
+

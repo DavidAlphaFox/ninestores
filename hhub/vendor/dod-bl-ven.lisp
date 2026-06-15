@@ -1,15 +1,18 @@
+;;; dod-bl-ven.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
-
-
 
 (defmethod ProcessUpdateRequest ((adapter VendorApprovalAdapter) (requestmodel RequestModelVendorApproval))
   :description "Adapter service method to call the BusinessService Update method"
   (setf (slot-value adapter 'businessservice) (find-class 'VendorApprovalService))
   ;; call the parent ProcessCreate
   (call-next-method))
-
 
 (defmethod doupdate ((service VendorApprovalService) (requestmodel RequestModelVendorApproval))
   (let* ((dbas (make-instance 'vendorDBService))
@@ -90,7 +93,7 @@
 
 (defun copyvendor-dbtodomain (dbobj businessobj)
   (let* ((comp (select-company-by-id (slot-value dbobj 'tenant-id))))
-    (with-slots (row-id name address phone email  email-add-verified suspend-flag active-flag approved-flag approval-status approved-by upi-id tenantobj) businessobj
+    (with-slots (row-id name address phone email  email-add-verified suspend-flag active-flag approved-flag approval-status approved-by upi-id company) businessobj
       (setf row-id (slot-value dbobj 'row-id))
       (setf name (slot-value dbobj 'name))
       (setf address (slot-value dbobj 'address))
@@ -105,7 +108,7 @@
       (setf approval-status (slot-value dbobj 'approval-status))
       (setf approved-by (slot-value dbobj 'approved-by))
       (setf upi-id (slot-value dbobj 'upi-id))
-      (setf tenantobj comp)
+      (setf company comp)
       businessobj)))
 
 (defmethod ProcessCreateRequest ((adapter VendorAdapter) (requestmodel RequestVendor))
@@ -128,7 +131,7 @@
   (call-next-method))
 
 (defmethod doreadall ((service VendorProfileService) (requestmodel RequestVendor))
-  (let* ((comp (slot-value requestmodel 'tenantobj))
+  (let* ((comp (slot-value requestmodel 'company))
 	 (vendorlist (select-vendors-for-company comp)))
 	
     ;; return back a list of upi payments response model

@@ -1,3 +1,9 @@
+;;; dod-bl-push.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -11,10 +17,12 @@
 (defmethod doDelete ((service VendorWebPushNotifyService) (requestmodel RequestDeleteWebPushNotifyVendor))
   :description "This method is responsible for Deleting a Web push notification subscription for a given vendor"
   (let* ((vendor (vendor requestmodel))
+	 (company (company requestmodel))
 	 (webpushdbservice (make-instance 'WebPushNotifyDBService))
 	 (subscription (db-fetch-Vendor-WebPushNotifySubscriptions webpushdbservice vendor)))
     (when subscription 
       (setf (dbobject webpushdbservice) subscription)
+      (setf (company webpushdbservice) company)
       ;; Delete the record
       (db-delete webpushdbservice))))
     	
@@ -70,9 +78,11 @@
 (defmethod doRead ((service VendorWebPushNotifyService) requestmodel)
   (let* ((vendor (slot-value requestmodel 'vendor))
 	 (webpushdbservice (make-instance 'WebPushNotifyDBService))
-	 (subscription (db-fetch-Vendor-WebPushNotifySubscriptions webpushdbservice vendor)))
-    subscription))
-
+	 (dbsubscription-knowledge (with-db-call (db-fetch-Vendor-WebPushNotifySubscriptions webpushdbservice vendor))))
+    (setf (bo-knowledge service) dbsubscription-knowledge)
+    (when (eq (bo-knowledge-truth dbsubscription-knowledge) :T)
+      (let ((dbsubscription (bo-knowledge-payload dbsubscription-knowledge)))
+	dbsubscription))))
 
 (defmethod ProcessReadRequest ((adapter VendorWebPushNotifyAdapter)  (requestmodel RequestGetWebPushNofityVendor))
   :description "This function is responsible for initializaing the BusinessService and calling its doService method. It then creates an instance of outboundwebservice"
@@ -125,7 +135,7 @@
 				      [= [:row-id] row-id]] :caching *dod-database-caching* :flatp t)))
     (setf (slot-value dbas 'dbobject) dbobj)))
 
-(defmethod db-fetch-all ((dbas WebPushNotifyDBService))
+(defmethod db-fetch-all ((dbas WebPushNotifyDBService)(rm RequestGetWebPushNofityVendor))
   :description "Fetch records by COMPANY"
   (let* ((tenant-id (slot-value dbas 'tenant-id))
 	 (dbobjs (clsql:select 'dod-webpush-notify :where

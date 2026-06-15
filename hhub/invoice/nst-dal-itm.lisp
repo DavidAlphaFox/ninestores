@@ -1,5 +1,44 @@
+;;; nst-dal-itm.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
+
+
+(defclass tax-entry ()
+  ((hsn-code      :initarg :hsn-code      :accessor hsn-code)
+   (taxable-value :initarg :taxable-value :initform 0 :accessor taxable-value)
+   (cgst-rate     :initarg :cgst-rate     :initform 0 :accessor cgst-rate)
+   (sgst-rate     :initarg :sgst-rate     :initform 0 :accessor sgst-rate)
+   (igst-rate     :initarg :igst-rate     :initform 0 :accessor igst-rate)
+   (cgst-amount   :initarg :cgst-amount   :initform 0 :accessor cgst-amount)
+   (sgst-amount   :initarg :sgst-amount   :initform 0 :accessor sgst-amount)
+   (igst-amount   :initarg :igst-amount   :initform 0 :accessor igst-amount))
+  (:documentation "Represents a single row in the HSN summary table."))
+
+(defclass gst-breakdown ()
+  ((entries       :initform (make-hash-table :test 'equal) :accessor entries)
+   (is-interstate :initarg :is-interstate :initform nil   :accessor interstate-p))
+  (:documentation "A container that groups taxes by HSN and Rate."))
+
+(defgeneric  generate-gst-tax-breakdown (invoice-header invoice-items)
+  (:documentation "Generate the invoice tax breakdown object based on the invoice header and invoice items"))
+  
+(defgeneric add-item-to-tax-breakdown (breakdown item)
+  (:documentation "Processes an InvoiceItem and aggregates it into the breakdown summary."))
+
+(defgeneric remove-item-from-tax-breakdown (breakdown item)
+  (:documentation "Subtracts an InvoiceItem's values from the breakdown summary."))
+
+(defgeneric update-item-in-tax-breakdown (breakdown old-item new-item)
+  (:documentation "Adjusts the breakdown when an item is modified."))
+
+(defgeneric get-sorted-tax-summary (breakdown)
+  (:documentation "Returns the tax entries as a list sorted by HSN code."))
+
 
 
 (defclass InvoiceItemAdapter (AdapterService)

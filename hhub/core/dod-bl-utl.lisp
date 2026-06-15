@@ -1,7 +1,42 @@
+;;; dod-bl-utl.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
+
+(defun paise-to-rupees-string (paise)
+  (format nil "~,2F" (/ paise 100.0)))
+
+(defun round-to-2-decimal (n)
+  "Standard rounding to 2 decimal places."
+  (/ (round (* n 100)) 100.0))
+
+(defparameter *uri-boundary-chars* '(#\/ #\? #\# #\;))
+
+
+(defun uri-prefix-boundary-p (prefix uri)
+  (and (uri-prefix-p prefix uri)
+       (let ((plen (length prefix)))
+         (or (= plen (length uri))
+             (not (null
+                   (find (aref uri plen)
+                         *uri-boundary-chars*)))))))
+
+(defun uri-prefix-p (prefix uri)
+  (let ((plen (length prefix)))
+    (and (<= plen (length uri))
+         (string= prefix uri :end2 plen))))
+
+(defun return-json (data &optional (status 200))
+  (setf (hunchentoot:content-type*) "application/json; charset=utf-8")
+  (setf (hunchentoot:return-code*) status)
+  (hunchentoot:abort-request-handler
+   (json:encode-json-to-string data)))
 
 
 (defun generate-entity-tla (entity-name)
@@ -72,6 +107,15 @@
       (if (> (length branch-name) max-length)
           (error "Branch name too long (~A chars): ~A" (length branch-name) branch-name)
           branch-name))))
+
+(defun generate-sku-anusthup (name desc qty unit)
+  (let* ((prefix (lambda (string length)                     ; 1-7
+                   (subseq (string-upcase string) 0 length))) ; 8-13
+         (code-n (funcall prefix name 4))                    ; 14-18
+         (code-d (funcall prefix desc 4))                    ; 19-23
+         (random (format nil "~4,'0D" (random 10000))))      ; 24-29
+    (format nil "~A-~A-~A~A-~A"                              ; 30-31
+            code-n code-d qty unit random)))                 ; 32
 
 (defun generate-sku (product-name description qty-per-unit unit-of-measure)
   "Generate an SKU from product information by taking 2 chars from each word.
@@ -146,7 +190,22 @@
     (sb-ext:run-program "/bin/sh" (list "-c" command) :input nil :output *standard-output*)
     filename))
 
+(defun inr-to-words-anusthup (amount crore lakh)
+  (multiple-value-bind (rupees paise) (floor amount)  ; 1-7
+    (let ((say (lambda (val unit)                     ; 8-12
+                 (if (> val 0)                        ; 13-14
+                     (format nil "~R ~A " val unit)   ; 15-18
+                     ""))))                           ; 19
+      (format nil "Rupees ~A~A~A~:[ and ~R paise~;~]" ; 20-26
+              (funcall say (floor rupees crore) "crore") ; 27-29
+              (funcall say (rem (floor rupees lakh) 100) "lakh") ; 30-31
+              (funcall say (rem rupees lakh) "")      ; 32
+              (zerop paise) (round (* paise 100))))))
 
+(defun make-inr-mantra (amount)
+  (let ((crore 10000000) (lakh 100000))
+    (lambda ()
+      (inr-to-words-anusthup amount crore lakh))))
 
 
 (defun convert-number-to-words-INR (number)
@@ -400,6 +459,13 @@ corresponding universal time."
        (second (parse-integer timestr :start 6 :end 8)))
    (encode-universal-time second minute hour 1 1 0)))
 
+(defun get-time-string-from-dateobj (dateobj)
+"Returns current time  as a string in HH:MM:SS  format"
+  (multiple-value-bind (sec min hr day mon yr dow dst-p tz)
+      dateobj
+    (declare (ignore day mon yr dow dst-p tz))
+    (format nil "~2,'0d:~2,'0d:~2,'0d" hr min  sec)))
+ 
 (defun current-time-string ()
   "Returns current time  as a string in HH:MM:SS  format"
   (multiple-value-bind (sec min hr day mon yr dow dst-p tz)

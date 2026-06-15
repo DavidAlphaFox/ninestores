@@ -1,9 +1,15 @@
+;;; dod-bl-odt.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
 
-;;得到订单的细节信息，主要是包含了哪些产品
+
 (defun get-order-items (order-instance)
 :documentation "Returns the list of order details instances given order-instance as input"
   (let ((tenant-id (slot-value order-instance 'tenant-id))
@@ -108,7 +114,7 @@
 	       :caching nil :flatp t )))
 
 
-;;通过产品ID获得所有订单
+
 (defun get-order-items-by-product-id (prd-id order-id tenant-id)
  (car (clsql:select 'dod-order-items  :where
 		[and [= [:deleted-state] "N"]
@@ -119,20 +125,20 @@
 
 (defun update-order-item (odt-instance); This function has side effect of modifying the database record.
   (clsql:update-records-from-instance odt-instance))
-;;取消订单，批量操作
+
 (defun cancel-order-items (list company-instance)
-  (let ((tenant-id (slot-value company-instance 'row-id))) ;;找到租户ID
+  (let ((tenant-id (slot-value company-instance 'row-id)))
     (mapcar (lambda (id)  (let ((dodorder (car (clsql:select 'dod-order-items :where [and [= [:row-id] id] [= [:tenant-id] tenant-id]] :flatp t :caching nil))))
-			  (setf (slot-value dodorder 'status) "CCN") ; CCN = CANCELLED BY CUSTOMER 客户取消了
+			  (setf (slot-value dodorder 'status) "CCN") ; CCN = CANCELLED BY CUSTOMER
 			  (clsql:update-record-from-slot dodorder  'status))) list )))
-;;删除订单，批量操作
+
 (defun delete-order-items (list company-instance)
     (let ((tenant-id (slot-value company-instance 'row-id)))
   (mapcar (lambda (id)  (let ((dodorder (car (clsql:select 'dod-order-items :where [and [= [:row-id] id] [= [:tenant-id] tenant-id]] :flatp t :caching nil))))
 			  (setf (slot-value dodorder 'deleted-state) "Y")
 			  (clsql:update-record-from-slot dodorder  'deleted-state))) list )))
 
-;; 恢复删除的订单
+
 (defun restore-deleted-order-details ( list company-instance )
     (let ((tenant-id (slot-value company-instance 'row-id)))
 (mapcar (lambda (id)  (let ((dodorder (car (clsql:select 'dod-order-items :where [and [= [:row-id] id] [= [:tenant-id] tenant-id]] :flatp t :caching nil))))
@@ -141,15 +147,22 @@
 
   
 
-;;存储订单，此时会记录折扣  
-(defun persist-order-items(order-id product-id vendor-id unit-price discount product-qty  tenant-id )
-  (hhub-log-message (format nil "discount just before saving is ~A" discount))
+  
+(defun persist-order-items(order-id product-id vendor-id unit-price discount product-qty sgst sgstamt cgst cgstamt igst igstamt taxablevalue totalitemval tenant-id )
   (clsql:update-records-from-instance (make-instance 'dod-order-items
 						    :order-id order-id
 						    :prd-id product-id
 						    :vendor-id vendor-id
 						    :unit-price unit-price
 						    :disc-rate discount
+						    :sgst sgst
+						    :sgstamt sgstamt
+						    :cgst cgst
+						    :cgstamt cgstamt
+						    :igst igst
+						    :igstamt igstamt
+						    :taxablevalue taxablevalue
+						    :totalitemval totalitemval
 						    :status "PEN"
 						    :fulfilled "N"
 						    :prd-qty product-qty
@@ -161,20 +174,48 @@
 
 
  ;This is a clean function with no side effect.
-(defun create-order-items (order product  product-qty unit-price discount company-instance)
+(defun create-order-items (order product  product-qty unit-price discount sgst sgstamt cgst cgstamt igst igstamt taxablevalue totalitemval company-instance)
   (let ((order-id (slot-value order 'row-id))
 	(product-id (slot-value product 'row-id))
 	(vendor-id (slot-value (product-vendor product) 'row-id))
 	(tenant-id (slot-value company-instance 'row-id)))
-    (persist-order-items order-id product-id vendor-id unit-price discount product-qty tenant-id)))
+    (persist-order-items order-id product-id vendor-id unit-price discount product-qty sgst sgstamt cgst cgstamt igst igstamt taxablevalue totalitemval tenant-id)))
 
+
+
+(defun update-gst-for-order-lineitem (lineitem product placeofsupply vstate)
+  (let* ((product-qty (slot-value lineitem 'prd-qty))
+	 (current-price (slot-value product 'current-price))
+	 (current-discount (slot-value product 'current-discount))
+	 (gstvalues (get-gstvalues-for-product product))
+	 (cgstrate (if gstvalues (first gstvalues) 0.00)) 
+	 (sgstrate (if gstvalues (second gstvalues) 0.00))
+	 (igstrate (if gstvalues (third gstvalues) 0.00)) 
+	 (txvalue (- (* product-qty current-price) (if current-discount (/ (* product-qty  current-price current-discount) 100) 0.00)))
+	 (intrastate (if (equal vstate placeofsupply) T NIL))
+	 (interstate (if (equal vstate placeofsupply) NIL T)) 
+	 (cgstamount (if intrastate (/ ( * txvalue cgstrate) 100) 0.00))
+	 (sgstamount (if intrastate (/ (* sgstrate txvalue) 100) 0.00))
+	 (igstamount (if interstate (/ (* igstrate txvalue) 100) 0.00))
+	 (totalitemvalue (+ txvalue (if intrastate (+ cgstamount sgstamount) igstamount))))
+    (with-slots (taxablevalue sgst cgst igst sgstamt cgstamt igstamt totalitemval) lineitem
+      (setf taxablevalue txvalue)
+      (setf sgst sgstrate)
+      (setf cgst cgstrate)
+      (setf igst igstrate)
+      (setf sgstamt sgstamount)
+      (setf cgstamt cgstamount)
+      (setf igstamt igstamount)
+      (setf totalitemval totalitemvalue)
+      lineitem)))
 
  ;This is a clean function with no side effect.
 (defun create-odtinst-shopcart (order product product-qty unit-price discount-rate company-instance)
-  (let ((product-id (slot-value product 'row-id))
-       	(vendor-id (slot-value (product-vendor product) 'row-id)) 
-	(tenant-id (slot-value company-instance 'row-id))
-	(order-id (if order (slot-value order 'row-id) nil)))
+  (let* ((product-id (slot-value product 'row-id))
+	 (vendor (product-vendor product))
+	 (vendor-id (slot-value vendor 'row-id))
+	 (tenant-id (slot-value company-instance 'row-id))
+	 (order-id (if order (slot-value order 'row-id) nil)))
     (make-instance 'dod-order-items
 		   :order-id order-id
 		   :vendor-id vendor-id
@@ -182,6 +223,14 @@
 		   :unit-price unit-price
 		   :disc-rate discount-rate
 		   :prd-qty product-qty
+		   :cgst 0.00
+		   :cgstamt 0.00
+		   :sgst 0.00
+		   :sgstamt 0.00
+		   :igst 0.00
+		   :igstamt 0.00
+		   :taxable-value 0.00
+		   :totalitemval 0.00
 		   :tenant-id tenant-id
 		   :deleted-state "N")))
 

@@ -50,35 +50,74 @@
       color: #28a745;
       font-size: 1.5rem;
     }
+
+    .product-description-wrapper {
+	overflow-x: hidden;          /* prevent horizontal scroll */
+	word-wrap: break-word;       /* wrap long text properly */
+	max-width: 100%;             /* constrain content */
+    }
+    
+    .product-description-wrapper iframe,
+    .product-description-wrapper embed,
+    .product-description-wrapper object,
+    .product-description-wrapper video {
+	max-width: 100%;
+	height: auto;
+	display: block;
+    }
+    
+    /* Optional – YouTube-style responsive container */
+    .product-description-wrapper .responsive-video {
+	position: relative;
+	padding-bottom: 56.25%;  /* 16:9 aspect ratio */
+	height: 0;
+	overflow: hidden;
+	max-width: 100%;
+    }
+    
+    .product-description-wrapper .responsive-video iframe,
+    .product-description-wrapper .responsive-video object,
+    .product-description-wrapper .responsive-video embed {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+    }
+
   </style>
-</head>
-<body>
+
+  <div class="container mt-5">
   <div class="row">
-    <!-- Product Images Carousel -->
     <div class="col-md-6 mb-4">
-      <!-- Thumbnails -->
-      <div class="thumbnail-container">
-	%Product-Images-Thumbnails%
-      </div>
+      <div class="thumbnail-container"> %Product-Images-Thumbnails% </div>
       %Product-Images-Carousel%
     </div>
 
     <div class="col-md-6">
-      <!-- Product Details -->
-      <div class="product-details">
-	<div class="product-info">
-	  <h2 class="mb-3">%Product Name% </h2>
-	  <h4> %Qty-Per-Unit% %Unit-Of-Measure%</h4>
-	  <p class="text-muted mb-4"> SKU: %Product-SKU%</p>
-	  <p><strong>Units in Stock:</strong>%Units-In-Stock%</p>
-	   <div class="mb-3">
-	     %Product-Pricing-Control%
-	   </div>
-	  <p class="mb-4">%Product-Description%</p>
-	</div>
+      <div class="product-details"> 
+      <div class="product-info">
+        <h2 class="mb-3">%Product Name%</h2>
+        <h4>%Qty-Per-Unit% %Unit-Of-Measure%</h4>
+        <p class="text-muted mb-4">SKU: %Product-SKU%</p>
+        <div class="mb-3">%Product-Pricing-Control%</div>
+        <p>%Add-to-Cart-Button%</p>
+      </div>
       </div>
     </div>
   </div>
+
+  <div class="row mt-4">
+    <div class="col-12">
+      <hr>
+      <h3 class="mb-4">Product Specifications & Description</h3>
+      <div class="product-description-wrapper">
+        %Product-Description%
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Custom JS -->
 <script>
 

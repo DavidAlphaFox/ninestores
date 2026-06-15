@@ -1,3 +1,9 @@
+;;; dod-ui-odt.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 
@@ -17,7 +23,7 @@
 	     (order-item (get-order-item-by-id item-id))
 	     (old-prdqty (slot-value order-item 'prd-qty))
 	     (diff (- old-prdqty prdqty))
-	     (product (get-odt-product order-item))
+	     (product (get-item-product order-item))
 	     (units-in-stock (slot-value product 'units-in-stock))
 	     (newunitsinstock (+ units-in-stock diff))
 	     (vendor (odt-vendorobject order-item))
@@ -59,7 +65,7 @@
   (let* ((order-item (get-order-item-by-id item-id))
 	 (itemqty (slot-value order-item 'prd-qty))
 	 (order-id (slot-value order-item 'order-id))
-	 (product (get-odt-product order-item))
+	 (product (get-item-product order-item))
 	 (prd-id (slot-value product 'row-id))
 	 (units-in-stock (slot-value product 'units-in-stock))
 	 (prd-image-path (slot-value product 'prd-image-path))
@@ -96,7 +102,7 @@
 	(:table :class "table table-striped"  (:thead (:tr
 				 (mapcar (lambda (item) (cl-who:htm (:th (cl-who:str item)))) header))) (:tbody
 				       (mapcar (lambda (odt)
-				   (let ((odt-product  (get-odt-product odt)))
+				   (let ((odt-product  (get-item-product odt)))
 				     (cl-who:htm (:tr (:td  :height "12px" (cl-who:str (slot-value odt 'order-id)))
 				       (:td  :height "12px" (cl-who:str (slot-value odt-product 'prd-name)))
 				       (:td  :height "12px" (cl-who:str (slot-value odt 'prd-qty)))
@@ -109,6 +115,10 @@
 (defun ui-list-shopcart (products shopcart)
     :documentation "A function used for rendering the shopping cart data in HTML format."
     (cl-who:with-html-output-to-string (*standard-output* nil)
+      (:div :class "product-card-row"
+	    (mapcar (lambda (column)
+		      (cl-who:htm
+		       (with-html-div-col-2 (cl-who:str column)))) (list "Product" "Price/Qty Per Unit" "Prd Qty" "Discount %" "Item Total")))
       (:div :id "idcustshoppingcartitems" :class "all-products-row"
 	    (mapcar (lambda (product odt)
 		      (cl-who:htm (:div :class "product-card-row" (product-card-shopcart product odt))))  products shopcart))))
@@ -118,9 +128,13 @@
     :documentation "A function used for rendering the shopping cart data in HTML format."
     (cl-who:with-html-output (*standard-output* nil)
       (:div :class "all-products-row"
+	    (:table :class "table table-sm  table-striped  table-hover"
+		    (:thead (:tr
+			     (mapcar (lambda (item) (cl-who:htm (:th (cl-who:str item)))) (list "Product Image" "Name" "SGST" "CGST" "IGST" "Qty" "Rate"))))) 
+	    (cl-who:htm 
 	    (mapcar (lambda (product odt)
 		      (cl-who:htm (:div :class "product-card-row" (product-card-shopcart-readonly product odt))))  products shopcart))
-      (:hr)))
+      (:hr))))
 
 
 
@@ -133,17 +147,16 @@
 
 (defun calculate-order-item-cost (order-item)
   :description "calculates the order item cost with respect to the unit price, discount, and tax rates if applicable"
-  (let* ( ;;获取折扣率
-          (discount (slot-value order-item 'disc-rate))
-          ;;获取单价
-	        (unit-price (slot-value order-item 'unit-price))
-          ;;计算折扣价格
-	        (pricewith-discount
-            (if discount
-				      (- unit-price (/ (* unit-price discount) 100))
-				      ;;else
-				      unit-price)))
-    pricewith-discount))
+  (let* ((discount (slot-value order-item 'disc-rate)) 
+	 (unit-price (slot-value order-item 'unit-price))
+	 (sgstamt (check-null (slot-value order-item 'sgstamt)))
+	 (cgstamt (check-null (slot-value order-item 'cgstamt)))
+	 (igstamt (check-null (slot-value order-item 'igstamt)))
+	 (itemtotal (if discount
+			(+ sgstamt cgstamt igstamt (- unit-price (/ (* unit-price discount) 100)))
+			;;else
+			(+ sgstamt cgstamt igstamt unit-price))))
+    itemtotal))
 
 
 (defun ui-list-cust-orderdetails  (header data)
@@ -156,12 +169,12 @@
 				 (mapcar (lambda (item) (cl-who:htm (:th (cl-who:str item)))) header))) 
 			(:tbody
 			 (mapcar (lambda (odt)
-				   (let* ((odt-product  (get-odt-product odt))
+				   (let* ((odt-product  (get-item-product odt))
 					  (prd-id (slot-value odt-product 'row-id))
 					  (prd-name (slot-value odt-product 'prd-name))
 					  (item-id (slot-value odt 'row-id))
 					  (ordid (slot-value odt 'order-id))
-					  (order (odt-orderobject odt))
+					  (order (get-order odt))
 					  (payment-mode (slot-value order 'payment-mode))
 					  (fulfilled (slot-value odt 'fulfilled))
 					  (status (slot-value odt 'status))
@@ -199,7 +212,7 @@
 
 (defun modal.cust-delete-order-item (item order-id)
   (let* ((id (slot-value item 'row-id))
-	 (item-product (get-odt-product item))
+	 (item-product (get-item-product item))
          (prd-name (slot-value item-product 'prd-name)))
     (cl-who:with-html-output (*standard-output* nil)
       (:span  :height "12px" (cl-who:str prd-name))
@@ -250,7 +263,7 @@
 	 (wallet (if customer (get-cust-wallet-by-vendor customer (get-login-vendor) (get-login-vendor-company))))
 	 (balance (if wallet (slot-value wallet 'balance) 0))
 	 (payment-mode (slot-value order-instance 'payment-mode))
-	 (ship-address (slot-value order-instance 'shipaddr))
+	 (ship-address (slot-value order-instance 'ship-addr-full))
 	 (customer-phone (slot-value customer 'phone))
 	 (orderid (slot-value order-instance 'row-id))
 	 (orderstatus (slot-value order-instance 'status))

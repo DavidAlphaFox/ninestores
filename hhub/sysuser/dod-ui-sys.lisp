@@ -1,3 +1,9 @@
+;;; dod-ui-sys.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -18,10 +24,8 @@
 
 
 (defun dod-controller-OTP-request-page ()
-  (let ((phone (hunchentoot:parameter "phone"))
-	(persona (hunchentoot:parameter "persona"))
-	(purpose (hunchentoot:parameter "purpose"))
-	(context (hunchentoot:parameter "context")))
+  (let ((session-id (hunchentoot:parameter "session"))
+	(phone (hunchentoot:parameter "phone")))
     (with-no-navbar-page-v2  "OTP Page"
       (:br)
       (:div :class "account-wall" :align "center"
@@ -33,18 +37,14 @@
 	      (:h3 (cl-who:str (format nil "OTP has been sent to your phone ~A" (concatenate 'string "xxxxx" (subseq phone 6)))))
 	      (with-html-form-having-submit-event  "form-hhubotppage" "hhubotpsubmitaction" 
 		(:div :id "withCountDownTimerExpired"
-		      (with-html-input-text-hidden "persona" persona)
-		      (with-html-input-text-hidden "purpose" purpose)
-		      (with-html-input-text-hidden "phone" phone)
+		      (with-html-input-text-hidden "session" session-id)
 		      (with-html-input-text "otp" "One Time Password" "Enter OTP" nil T "Please enter OTP" "1" :autocomplete "one-time-code" :inputmode "numeric" :pattern "[0-9]*" :maxlength "6")
 		      (:p :id "withCountDownTimer" :style "color: crimson;")
 		      (:div :class "form-group"
 			    (:button :class "submit center-block btn btn-primary btn-block" :type "submit" "Send OTP"))))
-	      (with-html-form  "form-hhubotpresendpage" "hhubotpregenerateaction"
+	      (with-html-form-having-submit-event  "form-hhubotpresendpage" "hhubotpregenerateaction"
 		(:div :class "form-group"
-		      (with-html-input-text-hidden "persona" persona)
-		      (with-html-input-text-hidden "purpose" purpose)
-		      (with-html-input-text-hidden "context" context)
+		      (with-html-input-text-hidden "session" session-id)
 		      (with-html-input-text-hidden "phone" phone)
 		      (:button :class "submit center-block btn btn-primary btn-block" :type "submit" (cl-who:str  (format nil "Regenerate OTP for ~A " (concatenate 'string "xxxxx" (subseq phone 6)))))))
 	      (hhub-html-page-footer)))
@@ -55,15 +55,14 @@
 
 (defun create-model-for-otpsubmitaction ()
   (let* ((otp (hunchentoot:parameter "otp"))
-	 (phone (hunchentoot:parameter "phone"))
-	 (persona (hunchentoot:parameter "persona"))
-	 (purpose (hunchentoot:parameter "purpose"))
-	 (context (funcall *otp-store* :get-context :persona persona :purpose purpose :phone phone))
-	 (sessionotp (funcall *otp-store* :get-otp :persona persona :purpose purpose :phone phone))
+	 (session (hunchentoot:parameter "session"))
+	 (context (funcall *otp-store* :get-context :session-id session))
+	 (sessionotp (funcall *otp-store* :get-otp :session-id session))
 	 (redirecturl nil))
-    ;;(hunchentoot:log-message* :info (format nil "context is ~A otp is ~A sessionotp is ~A" context otp sessionotp))
+    
+    (hunchentoot:log-message* :info (format nil "context is ~A otp is ~A sessionotp is ~A" context otp sessionotp))
     (if (equal (parse-integer otp) sessionotp)
-        (setf redirecturl (format nil "/hhub/~A" context))
+	(setf redirecturl (format nil "/hhub/~A" context))
 	;; else
 	(setf redirecturl *siteurl*))
     (function (lambda ()
@@ -71,32 +70,34 @@
   
 
 (defun dod-controller-otp-regenerate-action ()
-  (let ((phone (hunchentoot:parameter "phone"))
-	(persona (hunchentoot:parameter "persona"))
-	(purpose (hunchentoot:parameter "purpose"))
-	(context (hunchentoot:parameter "context")))
+  (let* ((session (hunchentoot:parameter "session"))
+	 (phone (hunchentoot:parameter "phone"))
+	 (context (funcall *otp-store* :get-context :session-id session))
+	 (persona (funcall *otp-store* :get-persona :session-id session))
+	 (purpose (funcall *otp-store* :get-purpose :session-id session)))
     (generateotp&redirect persona purpose phone context)))
    
 
 (defun generateotp&redirect (persona purpose phone context)
-:description "This function will generate OTP, save it to the session, send SMS to the phone number with OTP message and then redirect to OTP entering page, also remembering the context where to redirect after entering the OTP successfully."
-  (let ((otp (random 999999)))
+  :description "This function will generate OTP, save it to the session, send SMS to the phone number with OTP message and then redirect to OTP entering page, also remembering the context where to redirect after entering the OTP successfully."
+  (let ((otp (random 999999))
+	(session-id (hhub-random-password 8)))
     ;; Set the otp to the session value 
     (funcall *otp-store* :set
-             :persona persona
+	     :session-id session-id 
+	     :persona persona
              :purpose purpose
              :phone phone
              :otp otp
              :context context
              :ip (hunchentoot:real-remote-addr))
-
     ;; Send SMS to the phone with OTP template text 
     (if *HHUBOTPTESTING*
 	(hunchentoot:log-message* :info (format nil "sessionotp is ~A" otp))
 	;;else 
 	(send-sms-notification phone *HHUBAWSSNSSENDERID* (format nil *HHUBAWSSNSOTPTEMPLATETEXT* "Login Transaction" otp)))
     ;; redirect to the OTP page 
-    (hunchentoot:redirect (format nil "/hhub/otppage?persona=~A&purpose=~A&phone=~A&context=~A" persona purpose phone context))))
+    (format nil "/hhub/otppage?session=~A&phone=~A" session-id phone)))
 
 (defun com-hhub-transaction-suspend-account ()
   :documentation "This is a controller method which will suspend an Account"
@@ -131,10 +132,12 @@
     (with-standard-admin-page (:title "welcome to Nine Stores")
        (:h3 "Welcome " (cl-who:str (format nil "~a" (get-login-user-name))))
        (:hr)
-       (:div :class "list-group col-sm-6 col-md-6 col-lg-6 col-xs-12"
-	     (:a :class "list-group-item" :href "#" "Reset Password")
-	     (:a :class "list-group-item" :href *HHUBFEATURESWISHLISTURL* "Feature Wishlist")
-	     (:a :class "list-group-item" :href *HHUBBUGSURL* "Report Issues")))))
+      (:div :class "list-group col-sm-6 col-md-6 col-lg-6 col-xs-12"
+	    (:a :class "list-group-item" :href "/hhub/gsthsncodes" "GST HSN & SAC Codes")
+	    (:a :class "list-group-item" :href "/hhub/projsymlookup" "Project Symbol Lookup")
+	    (:a :class "list-group-item" :href "#" "Reset Password")
+	    (:a :class "list-group-item" :href *HHUBFEATURESWISHLISTURL* "Feature Wishlist")
+	    (:a :class "list-group-item" :href *HHUBBUGSURL* "Report Issues")))))
 
 (defun dod-controller-run-daily-orders-batch ()
  :documentation "This controller function is responsible to run the daily orders batch against all the subscriptions customers have made for a particular group/apartment/tenant" 
@@ -732,7 +735,7 @@
 	(cmpcity (hunchentoot:parameter "cmpcity"))
 	(cmpstate (hunchentoot:parameter "cmpstate"))
 	(cmpcountry (hunchentoot:parameter "cmpcountry"))
-	(cmpzipcode (hunchentoot:parameter "cmpzipcode"))
+	(cmpzipcode (parse-integer (hunchentoot:parameter "cmpzipcode")))
 	(tnccheck (hunchentoot:parameter "tnccheck"))
 	(captcha-resp (hunchentoot:parameter "g-recaptcha-response"))
 	(paramname (list "secret" "response" ) ) 
@@ -756,7 +759,7 @@
 				:updated-by nil)))
   (unless(and  ( or (null cmpname) (zerop (length cmpname)))
 	       ( or (null cmpaddress) (zerop (length cmpaddress)))
-	       ( or (null cmpzipcode) (zerop (length cmpzipcode))))
+	       (null cmpzipcode))
     (cond 
       ((null (cdr (car json-response))) (dod-response-captcha-error))
       ((and company
@@ -894,6 +897,7 @@
 	(hunchentoot:create-regex-dispatcher "^/hhub/searchhsncodesaction" 'com-hhub-transaction-search-gst-hsn-codes-action)
 	(hunchentoot:create-regex-dispatcher "^/hhub/createhsncodeaction" 'com-hhub-transaction-create-gst-hsn-code-action)
 	(hunchentoot:create-regex-dispatcher "^/hhub/updatehsncodeaction" 'com-hhub-transaction-update-gst-hsn-code-action)
+	(hunchentoot:create-regex-dispatcher "^/hhub/projsymlookup" 'com-hhub-controller-project-symbols-lookup-page)
 	
 	
 	;***************** COMPADMIN/COMPANYHELPDESK/COMPANYOPERATOR  RELATED ********************
@@ -924,12 +928,12 @@
 	(hunchentoot:create-regex-dispatcher "^/hhub/dodmyorders" 'dod-controller-my-orders)
 	(hunchentoot:create-regex-dispatcher "^/hhub/delorder" 'dod-controller-del-order) ;; not used. 
 	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustordsuccess" 'dod-controller-cust-ordersuccess)
-	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustorderprefs" 'dod-controller-my-orderprefs)
+	(hunchentoot:create-regex-dispatcher "^/hhub/custsubscriptions" 'dod-controller-customer-subscriptions)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustmyorderdetails" 'hhub-controller-customer-my-orderdetails)
 	;;(hunchentoot:create-regex-dispatcher "^/hhub/dodcustaddorderpref" 'dod-controller-cust-add-orderpref-page)
 	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustaddopfaction" 'dod-controller-cust-add-orderpref-action)
 	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustdelopfaction" 'dod-controller-cust-del-orderpref-action)
-	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustorderaddpage" 'dod-controller-cust-add-order-page)
+	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustordershipaddrpage" 'dod-controller-cust-order-shipping-address-page)
 	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustshopcartotpstep" 'dod-controller-cust-add-order-otpstep)
 	(hunchentoot:create-regex-dispatcher "^/hhub/dodmyorderaddaction" 'com-hhub-transaction-create-order)
 	(hunchentoot:create-regex-dispatcher "^/hhub/dodcustaddtocart" 'dod-controller-cust-add-to-cart)
@@ -979,6 +983,7 @@
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustonlinepayment"   'hhub-cust-online-payment)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubpincodecheck"   'hhub-controller-pincode-check)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustupipage"   'hhub-controller-upi-customer-order-payment-page)
+	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustorderupipage"   'com-hhub-transaction-show-customer-upi-page)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubvendorupinotfound"   'dod-controller-vendor-upi-notfound)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustpaymentmethodspage"   'dod-controller-customer-payment-methods-page)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustwalletrechargepage"   'hhub-controller-upi-recharge-wallet-page)
@@ -990,7 +995,8 @@
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustloginv2"  'dod-controller-customer-otploginpage)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustvendorstore"  'dod-controller-customer-products-by-vendor)
 	(hunchentoot:create-regex-dispatcher "^/hhub/hhubcustvendorsearch"  'dod-controller-customer-search-vendor)
-	
+	(hunchentoot:create-regex-dispatcher "^/hhub/nstcustomeraddress/([0-9]{10})$" 'dod-controller-customer-address)
+	(hunchentoot:create-regex-dispatcher "^/hhub/nstcustinvoices" 'com-hhub-transaction-customer-invoice-register-page)
 
 
 ;;***************************************************************************************************************************
@@ -1089,6 +1095,7 @@
 	(hunchentoot:create-regex-dispatcher "^/hhub/vinvoicesettingspage"   'com-hhub-transaction-invoice-settings-page)
 	(hunchentoot:create-regex-dispatcher "^/hhub/vsaveinvprintsettings"   'com-hhub-transaction-save-invoice-print-settings-action)
 	(hunchentoot:create-regex-dispatcher "^/hhub/vuploadprdimagesaction"   'com-hhub-transaction-vendor-upload-product-images-action)
+	(hunchentoot:create-regex-dispatcher "^/hhub/vwebrepl"   'com-hhub-transaction-vendor-display-webrepl-page)
 ))
 
 

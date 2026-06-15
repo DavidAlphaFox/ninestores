@@ -1,3 +1,9 @@
+;;; dod-ui-osh.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 
@@ -6,7 +12,7 @@
   (float (/ (* l b h) 5000)))
 
 
-(defun define-shipping-zones ()
+(defun init-shipping-zones ()
   (setf *HHUBSHIPPINGZONES* (make-hash-table :test 'equal))
   (setf (gethash "A" *HHUBSHIPPINGZONES*) "Zone A (Within City)")
   (setf (gethash "B" *HHUBSHIPPINGZONES*) "Zone B (Within State/region)")

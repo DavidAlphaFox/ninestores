@@ -1,6 +1,31 @@
+;;; dod-ui-ven.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
+
+
+(defun com-hhub-transaction-vendor-display-webrepl-page ()
+  (with-vend-session-check
+    (with-mvc-ui-page "Vendor Web REPL" #'create-model-for-vdisplay-webrepl  #'create-widgets-for-vdisplay-webrepl :role :vendor)))
+
+
+(defun create-model-for-vdisplay-webrepl ()
+  (let ((webrepltemplatehtml (funcall (nst-get-cached-core-template-func :templatenum 1))))
+    (function (lambda ()
+      (values webrepltemplatehtml)))))
+
+
+(defun create-widgets-for-vdisplay-webrepl (modelfunc)
+  (multiple-value-bind (webrepltemplatehtml) (funcall modelfunc)
+    (let ((widget1 (function (lambda ()
+		     (cl-who:with-html-output (*standard-output* nil)
+		       (cl-who:str webrepltemplatehtml))))))
+      (list widget1))))
 
 (defun com-hhub-transaction-vendor-upload-product-images-action ()
   (with-vend-session-check
@@ -255,22 +280,60 @@ background: linear-gradient(171deg, rgba(222,228,255,1) 0%, rgba(224,236,255,1) 
 			  (:h3 "Subscribe to Notifications on your Browser"))
 			(with-html-div-row
 			  (:p "Note: We send notifications for various events, for example:  when you receive a new order. Push notification will be sent to one browser only.")
-			  (:p "If you would like to subscribe to notifications on a different browser, you need to unsubscribe in current browser and subscribe in other browser"))
-			(with-html-div-row
-			  (with-html-div-col-4
-			    (:button :class "btn btn-lg btn-primary btn-block" :id "btnPushNotifications" :name "btnPushNotifications" "Subscribe")))))))
+			  (:p "If you would like to subscribe to notifications on a different browser, you need to unsubscribe in current browser and subscribe in other browser"))))))
 	   (widget2 (function (lambda ()
 		      (cl-who:with-html-output (*standard-output* nil)
-			(with-html-div-row
-			  (with-html-div-col-4
-			    (:a :href "dodvendindex?context=home" "Home"))
-			  (with-html-div-col-4
-			    (:a :id "btnPushSubscriptionRemoveFromServer" :href "#" (:i :class "fa-regular fa-trash-can"))))))))
+                        (:div :class "push-status-container"
+			      (:h3 "📢 Push Notification Subscription Status")
+			      (:p "Review the status below. The main button will guide you on the next required action based on the lifecycle state.")
+			      ;; --- 1. STATUS SUMMARY CARD (ALWAYS VISIBLE) ---
+			      ;; This is the primary UI element, dynamically colored by JavaScript.
+			      (:div :id "sync-status-panel" :class "alert alert-info" :role "alert"
+				    (:span :id "current-sync-message" "Checking subscription status..."))
+			      ;; --- 2. ACTION BUTTONS (ALWAYS VISIBLE) ---
+			      (:div :class "mt-3 d-flex flex-wrap gap-2"
+				    ;; The main toggle button
+				    (:button :id "btnPushNotifications"  :class "btn btn-sm btn-secondary"   :disabled "disabled" "Loading...")
+				    ;; The secondary action button (for force cleanup/State 4)
+                                    (:button :id "btnPushSubscriptionRemoveFromServer"
+					     :class "btn btn-sm btn-outline-danger"
+					     :style "display:none;" ; Initially hidden, shown by JS only in State 4
+					     "Force Remove from Backend"))
+			      ;; --- 3. COLLAPSIBLE TECHNICAL DETAILS (HIDDEN BY DEFAULT) ---
+			      (:p :class "mt-4"
+				  (:a :data-bs-toggle "collapse"  :href "#technicalDetailsCollapse"  :role "button" :aria-expanded "false" :aria-controls "technicalDetailsCollapse"      "Show Technical Sync Details (for troubleshooting)"))
+		              (:div :class "collapse" :id "technicalDetailsCollapse"
+			            (:p :class "text-muted small mt-2" "Diagnostics for IT support.")
+				    (:table :class "table table-striped table-bordered"
+				            (:thead
+					     (:tr
+					      (:th "Detail")
+					      (:th "Browser Status")
+					      (:th "Backend DB Status")))
+					    (:tbody
+					     (:tr
+					      (:td (cl-who:esc "**Subscription State**"))
+					      (:td :id "browser-state" "--")
+					      (:td :id "backend-state" "--"))
+					     (:tr
+					      (:td (cl-who:esc "**Endpoint Exists**"))
+					      (:td :id "browser-endpoint" "--")
+					      (:td :id "backend-endpoint" "--"))
+					     (:tr
+					      (:td (cl-who:esc "**Expiration Time**"))
+					      (:td :id "browser-expiry" "--")
+					      (:td :id "backend-expiry" "--"))))))))))   
+
 	   (widget3 (function (lambda ()
 		      (cl-who:with-html-output (*standard-output* nil)
-			(:script :src (format nil "~A/js/pushsubscribe.js" url)))))))
+			(with-html-div-row
+			  (with-html-div-col-4
+			    (:a :href "dodvendindex?context=home" "Home")))))))
+	   (widget4 (function (lambda ()
+		      (cl-who:with-html-output (*standard-output* nil)
+			(:script :src (format nil "/js/pushsubscribe.js")))))))
 	   
-      (list widget1 widget2 widget3))))
+      (list widget1 widget2 widget3 widget4))))
 
 (defun async-upload-files-s3bucket-behavior (state messagefunc)
   (multiple-value-bind (product images objectname object-id vendor) (funcall messagefunc) 
@@ -515,6 +578,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 	 (zipcode (zipcode vendor))
 	 (email (email vendor))
 	 (gstnumber (gstnumber vendor))
+	 (state (state vendor))
 	 (picture-path (picture-path vendor)))
     (cl-who:with-html-output (*standard-output* nil)
       (:div :class "row" :style "align: center"
@@ -532,6 +596,9 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 			    (:label :for "address")
 			    (:textarea :class "form-control" :name "address"  :placeholder "Enter Address ( max 200 characters) "  :rows "2" :onkeyup "countChar(this, 200)" (cl-who:str (format nil "~A" address))))
 		      (:div :class "form-group" :id "charcount")
+		      (:div :class "form-group"
+			    (:label :for "state" "Select State")
+			    (with-html-dropdown "state" *NSTGSTSTATECODES-HT* state))
 		      (:div :class "form-group"
 			    (:input :class "form-control" :name "zipcode"  :value zipcode :placeholder "Pincode"  :type "text" ))
 		      (:div :class "form-group"
@@ -556,6 +623,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 	 (address (hunchentoot:parameter "address"))
 	 (phone (hunchentoot:parameter "phone"))
 	 (zipcode (hunchentoot:parameter "zipcode"))
+	 (state (hunchentoot:parameter "state"))
 	 (gstnumber (hunchentoot:parameter "gstnumber"))
 	 (email (hunchentoot:parameter "email"))
 	 (vendor (get-login-vendor))
@@ -568,6 +636,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
     (setf (slot-value vendor 'name) name)
     (setf (slot-value vendor 'address) address)
     (setf (slot-value vendor 'phone) phone)
+    (setf (slot-value vendor 'state) state)
     (setf (slot-value vendor 'zipcode) zipcode)
     (setf (slot-value vendor 'gstnumber) gstnumber)
     (setf (slot-value vendor 'email) email)
@@ -607,7 +676,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 
       
 (defun modal.vendor-payment-methods-page (vpaymentmethods)
-  (when vpaymentmethods
+  (when (typep vpaymentmethods 'VPaymentMethods)
     (let* ((codenabled (slot-value vpaymentmethods 'codenabled))
 	   (upienabled (slot-value vpaymentmethods 'upienabled))
 	   (walletenabled (slot-value vpaymentmethods 'walletenabled))
@@ -643,12 +712,12 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 			  (with-html-custom-checkbox "paylaterenabled" "N" "Pay Later" nil))
 		      (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Save Settings")))))))
   ;; If Vendor payment methods are not found then create one
-  (unless vpaymentmethods
-    (cl-who:with-html-output (*standard-output* nil)                                                                                                                                                              
+  (when (typep vpaymentmethods 'BusinessObjectNIL)
+    (cl-who:with-html-output (*standard-output* nil)
       (:div :class "row"
-            (:div :class "col-xs-12 col-sm-12 col-md-12 col-lg-12"                                                                                                                                                
-                  (with-html-form "form-vendpaymentmethodscreate" "hhubvpmupdateaction"                                                                                                                           
-     		    (:div :class "form-group"
+            (:div :class "col-xs-12 col-sm-12 col-md-12 col-lg-12"
+                  (with-html-form  "form-vendpaymentmethodscreate" "hhubvpmupdateaction"
+                    (:div :class "form-group"
 			  (with-html-input-text-hidden "createvpaymentmethods" "Y")
 			  (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Create Vendor Payment Methods"))))))))
 
@@ -678,8 +747,8 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
     
     (when (equal createvpaymentmethods "Y")
       (with-entity-create 'VPaymentMethodsAdapter requestmodel
-	(if entity (hunchentoot:redirect "/hhub/dodvendprofile"))))
-    (unless createvpaymentmethods
+	(if entity (setf redirecturl "/hhub/dodvendprofile"))))
+    (unless (equal createvpaymentmethods "Y")
       ;; we are in update case now.
       (with-slots (codenabled upienabled payprovidersenabled walletenabled paylaterenabled) requestmodel
 	(if codenbld (setf codenabled codenbld) (setf codenabled "N"))
@@ -690,8 +759,9 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 	(if paylaterenbld (setf paylaterenabled paylaterenbld) (setf paylaterenabled "N"))
 	(with-entity-update 'VPaymentMethodsAdapter requestmodel
 	  (if entity
-	      (function (lambda ()
-		(values redirecturl)))))))))
+	      (setf redirecturl "/hhub/dodvendprofile")))))
+    (function (lambda ()
+      (values redirecturl)))))
 
 (defun modal.vendor-update-payment-gateway-settings-page ()
   (let* ((vendor (get-login-vendor))
@@ -890,18 +960,19 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
   (cl-who:with-html-output-to-string (*standard-output* nil :prologue t :indent t)
   ; (standard-customer-page (:title "Welcome to DAS Platform")
     (if company-list 
-	(cl-who:htm (:div :class "row-fluid"	  (mapcar (lambda (cmp)
-						      (cl-who:htm 
-						       (:form :method "POST" :action "dodvendaddtenantaction" :id "dodvendaddtenantform" 
-							      (:div :class "col-sm-4 col-lg-3 col-md-4"
-								    (:div :class "form-group"
-									  (:input :class "form-control" :name "cname" :type "hidden" :value (cl-who:str (format nil "~A" (slot-value cmp 'name)))))
-								    
-								    (:div :class "form-group"
-									  (:button :class "btn btn-lg btn-primary btn-block" :type "submit" (cl-who:str (format nil "~A" (slot-value cmp 'name)))))))))  company-list)))
-	;else
+	(cl-who:htm (:div :class "row-fluid"
+			  (mapcar (lambda (cmp)
+				    (cl-who:htm 
+				     (:form :method "POST" :action "dodvendaddtenantaction" :id "dodvendaddtenantform" 
+					    (:div :class "col-sm-4 col-lg-3 col-md-4"
+						  (:div :class "form-group"
+							(:input :class "form-control" :name "cname" :type "hidden" :value (cl-who:str (format nil "~A" (slot-value cmp 'name)))))
+						  
+						  (:div :class "form-group"
+							(:button :class "btn btn-lg btn-primary btn-block" :type "submit" (cl-who:str (format nil "~A" (slot-value cmp 'name)))))))))  company-list)))
+					;else
 	(cl-who:htm (:div :class "col-sm-12 col-md-12 col-lg-12"
-	      (:h3 "No records found"))))))
+			  (:h3 "No records found"))))))
 
 (defun dod-controller-vend-add-tenant-action ()
   (with-vend-session-check
@@ -909,69 +980,82 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 	   (company (select-company-by-name cname)))
       (create-vendor-tenant (get-login-vendor) "N"  company))))
 
+
 (defun dod-controller-vendor-add-product-page ()
-  (with-vend-session-check 
-    (let ((catglist (hhub-get-cached-product-categories))
-	  (charcountid1 (format nil "idchcount~A" (hhub-random-password 3))))
-      (with-standard-vendor-page "Welcome to DAS Platform- Your Demand And Supply destination."
-	(with-html-div-row
-	  (with-html-div-col-3 "")
-	  (with-html-div-col-6
-	    (:form :class "form-vendorprodadd" :role "form" :method "POST" :action "dodvenaddproductaction" :data-bs-toggle "validator" :enctype "multipart/form-data" 
-		   (:div :class "account-wall" 
-			 (:img :class "profile-img" :src "/img/logo.png" :alt "")
-			 (:h1 :class "text-center login-title"  "Add new product")
-			 (with-html-custom-checkbox "isserviceproduct" "N" "This is a Service" nil)
-			 (:div :class "form-group"
-			       (:input :class "form-control" :name "prdname" :placeholder "Enter Product Name ( max 30 characters) " :type "text" ))
-			 (:div :class "form-group"
-			       (:label :for "description")
-			       (:textarea :class "form-control" :name "description" :placeholder "Enter Product Description ( max 1000 characters) "  :rows "5" :onkeyup (format nil "countChar(~A.id, this, 1000)" charcountid1)))
-			 (:div :class "form-group" :id charcountid1)
-			 (with-html-input-text-hidden "prd-id" "0") ;; we are adding a new product hence prd-id is 0
-			 (:div :class "form-group"
-			       (:input :class "form-control" :name "prdprice" :placeholder "Price"  :type "text" :min "0.00" :max "10000.00" :step "0.01" ))
-			 (:div :class "form-group"
-			       (:input :class "form-control" :name "unitsinstock" :placeholder "Units In Stock"  :type "number" :min "1" :max "10000" :step "1" ))
-			 (:div :class "form-group"
-			       (:input :class "form-control" :name "qtyperunit" :placeholder "Qty Per Unit"  :type "number" :min "1" :max "10000" :step "1" ))
-			 (:div :class "form-group"
-			       (:label :for "unitofmeasure" "Unit Of Measure")
-			       (with-html-dropdown "unitofmeasure" (get-system-UOM-map) "KG"))
-			 (:a :data-bs-toggle "modal" :data-bs-target (format nil "#generatesku-modal")  :href "#"  (:i :class "fa-solid fa-wand-magic-sparkles"))
-			 (modal-dialog-v2 (format nil "generatesku-modal") "SKU Generator" (modal.generate-sku-dialog))
-			 (:div :class "form-group"
-			       (:input :class "form-control" :name "sku" :placeholder "SKU" :value "000000" :type "text" ))
-			 (:div :class "form-group"
-			       (:input :class "form-control" :name "hsncode" :placeholder "HSN Code" :type "text" ))
-			 (:div  :class "form-group" (:label :for "prodcatg" "Select Produt Category:" )
-				(ui-list-prod-catg-dropdown catglist nil))
-			 (:br) 
-			 (:div :class "form-group" (:label :for "yesno" "Enable Subscription")
-			       (ui-list-yes-no-dropdown "N"))
-			 (:div :class "form-group" (:label :for "prodimage" "Select Product Image:")
-			       (:input :class "form-control" :name "prodimage" :placeholder "Product Image" :type "file" ))
-			 (:div :class "form-group"
-			       (:button :class "btn btn-lg btn-primary btn-block" :type "submit" "Save"))))))))))
+  (with-vend-session-check
+    (with-mvc-ui-page "Add New Product/Service" #'createmodelforvendoraddnewproduct #'createwidgetsforvendoraddnewproduct :role :vendor)))
+
+(defun createmodelforvendoraddnewproduct ()
+  (let ((catglist (hhub-get-cached-product-categories))
+	(charcountid1 (format nil "idchcount~A" (hhub-random-password 3))))
+    (function (lambda ()
+      (values catglist charcountid1)))))
+
+(defun createwidgetsforvendoraddnewproduct (modelfunc)
+  (multiple-value-bind (catglist charcountid1) (funcall modelfunc)
+    (let ((widget1 (function (lambda ()
+		     (cl-who:with-html-output (*standard-output* nil)
+		       (with-html-div-row
+			 (with-html-div-col-12
+			   (:img :class "profile-img" :src "/img/logo.png" :alt "")
+			   (:h1 :class "text-center login-title"  "Add new product")
+			   (with-html-form-having-submit-event "form-vendorprodadd" "dodvenaddproductaction"
+			     (:div :class "form-group"
+				   (:input :class "form-control" :name "prdname" :placeholder "Enter Product Name ( max 30 characters) " :required t :type "text" ))
+			     (:div :class "form-group"
+				   (:label :for "description")
+				   (:textarea :class "form-control" :name "description" :placeholder "Enter Product Description ( max 1000 characters) "  :required t :rows "5" :onkeyup (format nil "countChar(~A.id, this, 1000)" charcountid1)))
+			     (:div :class "form-group" :id charcountid1)
+			     (with-html-input-text-hidden "prd-id" "0") ;; we are adding a new product hence prd-id is 0
+			     (:div :class "form-group"
+				   (:label :for "prdprice" "Product Price")
+				   (:input :class "form-control" :id "prdprice" :name "prdprice" :placeholder "Price" :required t :value 1.00 :type "number" :min "0.00" :max "10000.00" :step "0.01" ))
+			     (:div :class "form-group"
+				   (:label :for "unitsinstock" "Units In Stock")
+				   (:input :class "form-control" :id "unitsinstock" :name "unitsinstock" :placeholder "Units In Stock"  :value "100" :type "number" :min "1" :max "10000" :step "1" ))
+			     (:div :class "form-group"
+				   (:label :for "qtyperunit" "Quantity Per Unit")
+				   (:input :class "form-control" :id "qtyperunit" :name "qtyperunit" :placeholder "Qty Per Unit"  :value 1 :type "number" :min "1" :max "10000" :step "1" ))
+			     (:div :class "form-group"
+				   (:label :for "unitofmeasure" "Unit Of Measure")
+				   (with-html-dropdown "unitofmeasure" (get-system-UOM-map) "KG"))
+			     (:a :data-bs-toggle "modal" :data-bs-target (format nil "#generatesku-modal")  :href "#"  (:i :class "fa-solid fa-wand-magic-sparkles"))
+			     
+			     (:div :class "form-group"
+				   (:label :for "sku" "SKU")
+				   (:input :class "form-control" :id "sku" :name "sku" :placeholder "SKU" :value "000000" :type "text" ))
+			     (:div :class "form-group"
+				      (:label :for "hsncode" "HSN/SAC Code")
+				   (:input :class "form-control" :id "hsncode" :name "hsncode" :placeholder "HSN Code" :value "000000" :type "text" ))
+			     (:div  :class "form-group" (:label :for "prodcatg" "Select Produt Category:" )
+				    (ui-list-prod-catg-dropdown catglist nil))
+			     (:div :class "form-group" (:label :for "yesno" "Enable Subscription")
+				   (ui-list-yes-no-dropdown "N"))
+			     (:div :class "form-group"
+				   (with-html-custom-checkbox "isserviceproduct" "N" "Mark as Service Product" nil))
+			     (:div :class "form-group"
+				   (:input :class "btn btn-lg btn-primary btn-block" :name "submit" :type "submit" :value "Save")))
+			   (modal-dialog-v2 (format nil "generatesku-modal") "SKU Generator" (modal.generate-sku-dialog)))))))))
+      (list widget1))))
+
 
 
 (defun modal.generate-sku-dialog ()
   (cl-who:with-html-output (*standard-output* nil)
-    (with-html-form "skuGeneratorForm" nil
-      (:div :class "input-group"
-	    (with-html-input-text "productName" "Product Name" "Enter Product Name" "" T "Enter Product Name" 1))
-      (:div :class "input-group"
-	    (with-html-input-text "productDescription" "Product Description" "Enter Product Description" "" T "Enter Product Description" 2))
-      (:div :class "input-group"
-	    (with-html-input-number "qtyperunit" "Qty Per Unit" "Quantity Per Unit" "" 1 10000 t "Enter a number" 3)) 
-      (:div :class "form-group"
-	    (:label :for "unitofmeasure" "Unit Of Measure")
-	    (with-html-dropdown "unitOfMeasure" (get-system-UOM-map) "KG"))
-      (:div :class "input-group"
-	    (with-html-input-text-readonly "generatedSku" "Generated SKU" "Generated SKU" "" T "Generated SKU" 3))
-      (:button :class "btn btn-outline-secondary mr-1" :type "button" :id "copySkuBtn" (:i :class "fa fa-clipboard") "&nbsp;Copy&nbsp;")
-      (:button :class "btn btn-primary" :type "button" :id "generateSkuBtn" "Generate SKU")
-      (:script :src (format nil "~A/js/gensku.js" *siteurl*)))))
+    (:div :class "input-group"
+	  (with-html-input-text "productName" "Product Name" "Enter Product Name" "" T "Enter Product Name" 1))
+    (:div :class "input-group"
+	  (with-html-input-text "productDescription" "Product Description" "Enter Product Description" "" T "Enter Product Description" 2))
+    (:div :class "input-group"
+	  (with-html-input-number "qtyperunit" "Qty Per Unit" "Quantity Per Unit" "" 1 10000 t "Enter a number" 3)) 
+    (:div :class "form-group"
+	  (:label :for "unitofmeasure" "Unit Of Measure")
+	  (with-html-dropdown "unitOfMeasure" (get-system-UOM-map) "KG"))
+    (:div :class "input-group"
+	  (with-html-input-text-readonly "generatedSku" "Generated SKU" "Generated SKU" "" T "Generated SKU" 4))
+  (:button :class "btn btn-outline-secondary mr-1" :type "button" :id "copySkuBtn" (:i :class "fa fa-clipboard") "&nbsp;Copy&nbsp;")
+  (:button :class "btn btn-primary" :type "button" :id "generateSkuBtn" "Generate SKU")
+  (:script :src (format nil "~A/js/gensku.js" *siteurl*))))
 
 
 (defun vendor-upload-file-s3bucket (filename objectname object-id vendor-id tenant-id)
@@ -1073,6 +1157,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 	(setf params (acons "mode" "edit" params))
 	;;else
 	(setf params (acons "mode" "add" params)))
+
     (setf params (acons "company" company params))
     (setf params (acons "vendor" vendor params))
     (setf params (acons "uri" (hunchentoot:request-uri*)  params))
@@ -1259,9 +1344,59 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 
 
 
-
-
 (defun dod-controller-vendor-otploginpage ()
+  (handler-case
+      (progn
+        (when (equal (caar (clsql:query "select 1"
+                                        :flatp nil :field-names nil
+                                        :database *dod-db-instance*)) 1)
+          t)
+        (if (is-dod-vend-session-valid?)
+            (hunchentoot:redirect "/hhub/dodvendindex?context=home")
+            (with-standard-page-template-v3
+                "Vendor OTP Login | Nine Stores"
+               (lambda ()
+                    (cl-who:htm
+                      (:nav :class "bg-gray-950/80 backdrop-blur-md text-white p-4 shadow-md"
+                        (:div :class "container mx-auto flex justify-between items-center"
+                          (:div :class "text-lg font-semibold tracking-wide"
+                            "Nine Stores Vendor Portal")
+                          (:div
+                            (:a :href "/" :class "text-gray-300 hover:text-white transition"
+                                "← Back to Home"))))))
+              (:div :class "bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl w-[90%] max-w-md p-8 text-center text-white"
+                    (:img :src "/img/logo.png" :alt "Nine Stores Logo" :class "mx-auto mb-6 w-28 h-28 rounded-full shadow-lg border border-white/10 bg-white/10 p-2")
+		    ;;<!-- Title -->
+		    (:h1 :class "text-2xl font-bold mb-2" "Welcome to Nine Stores")
+		    (:p :class "text-gray-300 mb-6" "Vendor OTP Login Portal")
+		    (with-catch-submit-event "idform-vendsignin"
+		      (:form :id "vendsigninwithotp" :method "POST" :action "hhubvendloginotpstep" :class "space-y-5"
+			     (:div
+			      (:input :type "number"
+				      :id "phone"
+				      :name "phone"
+				      :placeholder "Enter RMN. Ex: 9999999990"
+				      :required "true"
+				      :class "w-full px-4 py-3 bg-white/20 border border-white/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#38bdf8] placeholder-gray-300 text-white"))
+			     (:button :type "submit"
+				      :class "w-full py-3 bg-gradient-to-r from-[#38bdf8] to-[#3b82f6] hover:opacity-90 rounded-lg text-white font-semibold text-lg shadow-md transition"
+				      "Get OTP")))
+			  ;;<!-- Divider -->
+			  (:div :class "my-6 border-t border-white/20")
+			  ;;<!-- Alternative login -->
+			  
+			  ;;<!-- Footer -->
+		     (:footer :class "mt-8 text-xs text-gray-400" "&copy 2026 Nine Stores. All rights reserved.")))))
+    (clsql:sql-database-data-error (condition)
+      (when (equal (clsql:sql-error-error-id condition) 2013)
+        (progn
+          (stop-das)
+          (start-das)
+          (hunchentoot:redirect "/hhub/vendor-login.html"))))))
+
+
+
+(defun dod-controller-vendor-otploginpagev2 ()
   (handler-case 
       (progn  
 	(if (equal (caar (clsql:query "select 1" :flatp nil :field-names nil :database *dod-db-instance*)) 1) T)      
@@ -1269,13 +1404,13 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 	    (hunchentoot:redirect "/hhub/dodvendindex?context=home")
 	    (with-standard-vendor-page-v2  "Welcome to Nine Stores Platform - Vendor Login "
 	      (with-html-div-row
-		(with-html-div-col-12
+		(with-html-div-col-12 
 		  (with-html-card
-		      (:title "Login"
+		      (:title "Vendor Login"
 		       :image-src "/img/logo.png"
 		       :image-alt "Vendor Login to Nine Stores"
 		       :image-style "width: 200px; height: 200px;")
-		    (with-html-form  "form-vendorsignin" "hhubvendloginotpstep"
+		    (with-html-form-having-submit-event  "form-vendorsignin" "hhubvendloginotpstep"
 		      (:div :class "form-group"
 			    (:input :class "form-control" :name "phone" :placeholder "Enter RMN. Ex: 9999999990" :type "number" :required "true" ))
 		      (:div :class "form-group"
@@ -2057,7 +2192,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 				      :company company
 				      :vendor vendor))
 	(vpaymentmethods (processreadrequest adapter requestmodel)))
-    (when vpaymentmethods 
+    (when (typep vpaymentmethods 'VPaymentMethods) 
       (with-slots (codenabled upienabled payprovidersenabled walletenabled paylaterenabled) vpaymentmethods
 	(addloginvendorsetting "codenabled" codenabled)
 	(addloginvendorsetting "upienabled" upienabled)
@@ -2534,7 +2669,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 	 (mainorder (get-order-by-id (slot-value vorder-instance 'order-id) company))
 	 (order-id (if mainorder (slot-value mainorder 'row-id)))
 	 (payment-mode (if mainorder (slot-value mainorder 'payment-mode)))
-	 (header (list "Product" "Product Qty" "Unit Price"  "Sub-total"))
+	 (header (list "Product" "Product Qty" "Unit Price" "SGST" "CGST" "IGST"  "Sub-total"))
 	 (odtlst (if mainorder (dod-get-cached-order-items-by-order-id (slot-value mainorder 'row-id) (hunchentoot:session-value :order-func-list) )) )
 	 (order-amt (slot-value vorder-instance 'order-amt))
 	 (shipping-cost (slot-value vorder-instance 'shipping-cost))
@@ -2556,6 +2691,12 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 		  (cl-who:htm (:h2 (:span :class "label label-danger" (cl-who:str (format nil "Low wallet Balance = Rs ~$" balance))))))
 					;else
 	      (:h3 (:span :class "label label-success" (cl-who:str (format nil "Total: ~A ~$" currsymbol total))))
+	      (if (equal venorderfulfilled "N") 
+		  (cl-who:htm
+		   (with-html-form "form-vendordercancel" "dodvenordcancel" 
+		     (with-html-input-text-hidden "id" order-id)
+		     (:div :class "form-group" :style "display:block"
+			   (:input :type "submit"  :class "btn btn-primary" :value "Cancel Order")))))
 	      (if (equal venorderfulfilled "Y") 
 		  (cl-who:htm (:span :class "label label-info" "FULFILLED"))
 		  ;; ELSE
@@ -2566,46 +2707,45 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 		     ;; (:a :onclick "return CancelConfirm();" :href (format nil "dodvenordcancel?id=~A" (slot-value order 'row-id) ) (:span :class "btn btn-primary"  "Cancel")) "&nbsp;&nbsp;"
 		     (:div :class "form-group"
 			   (if mainorder ;; if the order is present only then show the complete button. 
-			       (cl-who:htm (:input :type "submit"  :class "btn btn-primary" :value "Complete")))))))))
+			       (cl-who:htm (:input :type "submit"  :class "btn btn-primary" :value "Fulfill Order")))))))))
       (when (and (equal storepickupenabled "Y") (= shipping-cost 0.00))
 	(cl-who:htm
 	 (:div :align "right" :class "stampbox-big rotated" "Store Pickup")))
-      (if odtlst (ui-list-vend-orderdetails header odtlst) "No order details")
-      (if mainorder (display-order-header-for-vendor mainorder))
-      (with-html-form "form-vendordercancel" "dodvenordcancel" 
-	(with-html-input-text-hidden "id" order-id)
-	(:div :class "form-group" :style "display:none"
-	      (:input :type "submit"  :class "btn btn-primary" :value "Cancel Order"))))))
+      (if odtlst (ui-list-vend-orderdetails header odtlst currsymbol) "No order details")
+      (if mainorder (display-order-header-for-vendor mainorder)))))
 
 (defun dod-controller-vendor-orderdetails ()
   (with-vend-session-check
     (with-mvc-ui-page "Vendor Order Details" #'create-model-for-vendororderdetails #'create-widgets-for-vendororderdetails :role :vendor)))
 
 (defun create-model-for-vendororderdetails ()
-  (let* ((dodvenorder (get-vendor-orders-by-orderid (hunchentoot:parameter "id") (get-login-vendor) (get-login-vendor-company)))
+  (let* ((vendor (get-login-vendor))
+	 (company (get-login-vendor-company))
+	 (dodvenorder (get-vendor-orders-by-orderid (hunchentoot:parameter "id") vendor company))
 	 (customer (get-customer dodvenorder))
-	 (wallet (get-cust-wallet-by-vendor customer (get-login-vendor) (get-login-vendor-company)))
+	 (wallet (get-cust-wallet-by-vendor customer vendor company))
 	 (balance (slot-value wallet 'balance))
 	 (venorderfulfilled (if dodvenorder (slot-value dodvenorder 'fulfilled)))
-	 (order (get-order-by-id (hunchentoot:parameter "id") (get-login-vendor-company)))
+	 (order (get-order-by-id (hunchentoot:parameter "id") company))
 	 (order-id (if order (slot-value order 'row-id)))
 	 (payment-mode (slot-value order 'payment-mode))
 	 (header (list "Product" "Product Qty" "Unit Price"  "Sub-total"))
 	 (odtlst (if order (dod-get-cached-order-items-by-order-id (slot-value order 'row-id) (hunchentoot:session-value :order-func-list)  )) )
 	 (total (reduce #'+  (mapcar (lambda (odt)
 				       (* (slot-value odt 'current-price) (slot-value odt 'prd-qty))) odtlst)))
-	 (lowwalletbalance (< balance total)))
+	 (lowwalletbalance (< balance total))
+	 (currsymbol (get-currency-html-symbol (get-account-currency company))))
     (function (lambda ()
-      (values order order-id header odtlst lowwalletbalance payment-mode balance total venorderfulfilled)))))
+      (values order order-id header odtlst lowwalletbalance payment-mode balance total venorderfulfilled currsymbol)))))
 
 (defun create-widgets-for-vendororderdetails (modelfunc)
-  (multiple-value-bind (order order-id header odtlst lowwalletbalance payment-mode balance total venorderfulfilled) (funcall modelfunc)
+  (multiple-value-bind (order order-id header odtlst lowwalletbalance payment-mode balance total venorderfulfilled currsymbol) (funcall modelfunc)
     (let ((widget1 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
 		       (if order (display-order-header-for-vendor  order))))))
 	  (widget2 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
-		       (if odtlst (ui-list-vend-orderdetails header odtlst) "No order details")))))
+		       (if odtlst (ui-list-vend-orderdetails header odtlst currsymbol) "No order details")))))
 	  (widget3 (function (lambda ()
 		     (cl-who:with-html-output (*standard-output* nil) 
 		       (with-html-div-row 
@@ -2626,7 +2766,7 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 
 
 
-(defun ui-list-vend-orderdetails (header data)
+(defun ui-list-vend-orderdetails (header data currsymbol)
     (cl-who:with-html-output (*standard-output* nil)
       (:div :class  "panel panel-default"
 	    (:div :class "panel-heading" "Order Items")
@@ -2636,11 +2776,20 @@ Phase2: User should copy those URLs in Products.csv and then upload that file."
 				   (mapcar (lambda (item) (cl-who:htm (:th (cl-who:str item)))) header))) 
 			  (:tbody
 			   (mapcar (lambda (odt)
-				     (let* ((odt-product  (get-odt-product odt))
-					    (pricewith-discount (calculate-order-item-cost odt))
-					    (prd-qty (slot-value odt 'prd-qty)))
+				     (let* ((odt-product  (get-item-product odt))
+					    (prd-qty (slot-value odt 'prd-qty))
+					    (sgst (slot-value odt 'sgst))
+					    (sgstamt (slot-value odt 'sgstamt))
+					    (cgst (slot-value odt 'cgst))
+					    (cgstamt (slot-value odt 'cgstamt))
+					    (igst (slot-value odt 'igst))
+					    (igstamt (slot-value odt 'igstamt))
+					    (taxablevalue (slot-value odt 'taxablevalue))
+					    (totalitemval (slot-value odt 'totalitemval)))
 				       (cl-who:htm (:tr (:td  :height "12px" (cl-who:str (slot-value odt-product 'prd-name)))
-						 (:td  :height "12px" (cl-who:str (format nil  "~d" prd-qty)))
-						 (:td  :height "12px" (cl-who:str (format nil  "Rs. ~$" pricewith-discount)))
-						 (:td  :height "12px" (cl-who:str (format nil "Rs. ~$" (* pricewith-discount prd-qty))))
-						 )))) (if (not (typep data 'list)) (list data) data))))))))
+							(:td  :height "12px" (cl-who:str (format nil  "~d" prd-qty)))
+							(:td  :height "12px" (cl-who:str (format nil  "~A ~$" currsymbol taxablevalue)))
+							(:td  :height "12px" (cl-who:str (format nil  "~A ~$ @ ~$%"  currsymbol sgstamt sgst)))
+							(:td  :height "12px" (cl-who:str (format nil  "~A ~$ @ ~$%"  currsymbol cgstamt cgst)))
+							(:td  :height "12px" (cl-who:str (format nil  "~A ~$ @ ~$%"  currsymbol igstamt igst)))
+							(:td  :height "12px" (cl-who:str (format nil "~A ~$" currsymbol (* totalitemval  prd-qty)))))))) (if (not (typep data 'list)) (list data) data))))))))

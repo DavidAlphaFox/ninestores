@@ -14,6 +14,46 @@ var slideindex =1;
 document.addEventListener('contextmenu', event => event.preventDefault());
 
 
+async function checkExistingAddress(phone) {
+  if (phone.length === 10) {
+    try {
+      const res = await fetch(`/hhub/nstcustomeraddress/${phone}`);
+      const data = await res.json();
+      if (data && data.addresses && data.addresses.length > 0) {
+        const container = document.getElementById('saved-addresses-section');
+        const tiles = document.getElementById('saved-address-tiles');
+        container.style.display = 'block';
+        tiles.innerHTML = '';
+        data.addresses.forEach(addr => {
+          const card = document.createElement('div');
+          card.className = 'card border-primary';
+          card.style.width = '15rem';
+          card.innerHTML = `
+            <div class="card-body">
+              <p class="card-text">${addr.custname}<br>${addr.address}<br>${addr.city}, ${addr.state}, ${addr.zipcode}</p>
+              <button type="button" class="btn btn-outline-primary btn-sm" onclick='useSavedAddress(${JSON.stringify(addr)}, event);'>Use this address</button>
+            </div>`;
+          tiles.appendChild(card);
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching addresses:', err);
+    }
+  }
+}
+
+function useSavedAddress(addr) {
+    event.stopPropagation();
+    event.preventDefault();
+    document.getElementById('shipaddress').value = addr.address;
+    document.getElementById('shipcity').value = addr.city;
+    document.getElementById('shipstate').value = addr.state;
+    document.getElementById('shipzipcode').value = addr.zipcode;
+    document.getElementById('custname').value = addr.custname;
+    document.getElementById('email').value = addr.email;
+}
+
+
 // Final recommended implementation (universal)
 function generateUniqueId() {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -434,17 +474,19 @@ $(document).ready(function() {
 */
 
 
-
-function displaybillingaddress (){
-    if( document.getElementById('billsameasshipchecked').checked ){
-	$('#billingaddressrow').hide();
-	clearbilltoaddress();
-    }else
-    {
-	//copyshiptobillto();
-	$('#billingaddressrow').show();
+function displaybillingaddress() {
+    const checkbox = document.getElementById('billsameasshipchecked');
+    if (checkbox.checked) {
+        // Always sync billing with shipping
+        copyshiptobillto();
+        // Hide billing UI (UX only)
+        $('#billingaddressrow').hide();
+    } else {
+        // User wants to enter billing manually
+        $('#billingaddressrow').show();
     }
 }
+
 
 function displaygstdetails () {
     if( document.getElementById('claimitcchecked').checked ){
@@ -781,20 +823,28 @@ const registerforsubmitformevent = (component) => {
 };
 
 
-function submitformandredirect (theForm){
+function submitformandredirect(theForm) {
+    // 1. Get the raw HTML form element if 'theForm' is a jQuery object
+    const formElement = $(theForm)[0];
+    // 2. Perform Vanilla JS validation check
+    if (!formElement.checkValidity()) {
+        // This triggers the browser's built-in error bubbles
+        formElement.reportValidity();
+        return; // Stop execution if form is invalid
+    }
+    // 3. If valid, proceed with your existing logic
     $(theForm).find("button[type='submit']").hide();
     ajaxCallParams.Type = "POST";
     ajaxCallParams.Url = $(theForm).attr("action");
-    ajaxCallParams.DataType = "HTML"; // Return data type e-g Html, Json etc                                                                                                                                    
-    ajaxDataParams  = $(theForm).serialize();
-    //  ajaxDataParams  = new FormData(theForm);
-    ajaxCall(ajaxCallParams, ajaxDataParams, function (data) { 
-	console.log("Form submitted");
-	if (data.includes("pdf"))
-	    window.open(data); 
-	else
-	    location.replace(data);
-	
+    ajaxCallParams.DataType = "HTML"; 
+    ajaxDataParams = $(theForm).serialize();
+    ajaxCall(ajaxCallParams, ajaxDataParams, function (data) {
+        console.log("Form submitted");
+        if (data.includes("pdf")) {
+            window.open(data);
+        } else {
+            location.replace(data);
+        }
     });
 }
 
@@ -810,8 +860,6 @@ function searchformsubmit (theForm, resultdiv){
 	$(resultdiv).html(data);
     });
 }
-
-
 
 $(".form-shopcart").on('submit', function (e){
     e.preventDefault();

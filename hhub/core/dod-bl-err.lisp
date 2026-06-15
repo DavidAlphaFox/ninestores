@@ -1,5 +1,56 @@
+;;; dod-bl-err.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
+
+
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (define-condition hhub-database-error (error)
+    ((errstring
+      :initarg :errstring
+      :reader getExceptionStr))
+    (:documentation "Base condition for logical database results (non-fatal).")))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (define-condition hhub-unknown (error)
+    ((errstring
+      :initarg :errstring
+      :reader getExceptionStr))
+    (:documentation "Base condition for logical database results (non-fatal).")))
+
+
+;; --- No Result ---
+(define-condition hhub-no-result (hhub-database-error)
+  ()
+  (:report (lambda (c s)
+             (format s "No result found: ~A" (getExceptionStr c))))
+  (:documentation "Raised when a DB query returns zero rows."))
+
+;; --- Contradiction (multiple results when only one expected) ---
+(define-condition hhub-contradiction (hhub-database-error)
+  ()
+  (:report (lambda (c s)
+             (format s "Contradictory results: ~A" (getExceptionStr c))))
+  (:documentation "Raised when multiple inconsistent results were found."))
+
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (define-condition nst-api-timeout-error (error) 
+    ((errstring
+      :initarg :errstring
+      :reader getExceptionStr))))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (define-condition nst-api-internal-error (error)
+    ((errstring
+      :initarg :errstring
+      :reader getExceptionStr))))
+
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (define-condition hhub-business-function-error (error)
@@ -27,12 +78,6 @@
 
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (define-condition hhub-database-error (error)
-    ((errstring
-      :initarg :errstring
-      :reader getExceptionStr))))
-
-(eval-when (:compile-toplevel :load-toplevel :execute)
   (define-condition nst-shipping-error (error)
     ((errstring
       :initarg :errstring
@@ -53,6 +98,94 @@
 	     (format stream "~A. ~A" exceptionstr (sb-debug:list-backtrace)))
 	   ;; return the exception.
 	   (error ,condition :errstring (format nil "Caught error: ~A" e)))))))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defparameter *nst-environment* :development) 
+  ;; :development | :staging | :production
+  (defmacro with-nst-debugger (&body body)
+    "Debugger-centric NST execution boundary.
+     - Development  : drop into debugger (full SLIME stack)
+     - Staging      : log full stacktrace + re-signal
+     - Production   : log sanitized + signal business condition"
+    `(handler-bind
+         ((error
+            (lambda (e)
+	      (case *nst-environment*
+                ;; ------------------------------------------------------------
+                ;; DEVELOPMENT MODE
+                ;; ------------------------------------------------------------
+                (:development
+                 ;; Let SBCL debugger take full control
+                 (invoke-debugger e))
+		;; ------------------------------------------------------------
+                ;; STAGING MODE
+                ;; ------------------------------------------------------------
+                (:staging
+                 (when (boundp '*HHUBBUSINESSFUNCTIONSLOGFILE*)
+                   (with-open-file (stream *HHUBBUSINESSFUNCTIONSLOGFILE*
+                                           :direction :output
+                                           :if-exists :append
+                                           :if-does-not-exist :create)
+                     (format stream "~&[~A] STAGING ERROR: ~A~%"
+                             (mysql-now) e)
+                     (when (find-package :sb-debug)
+                       (funcall (intern "PRINT-BACKTRACE" :sb-debug)
+                                :stream stream))))
+                 (signal e))
+		;; ------------------------------------------------------------
+                ;; PRODUCTION MODE
+                ;; ------------------------------------------------------------
+                (:production
+                 (when (boundp '*HHUBBUSINESSFUNCTIONSLOGFILE*)
+                   (with-open-file (stream *HHUBBUSINESSFUNCTIONSLOGFILE*
+                                           :direction :output
+                                           :if-exists :append
+                                           :if-does-not-exist :create)
+                     (format stream "~&[~A] PROD ERROR: ~A~%"
+                             (mysql-now) (type-of e))))
+                 (error 'hhub-database-error
+                        :errstring "Unexpected system error occurred."))
+		;; ------------------------------------------------------------
+                ;; DEFAULT FALLBACK
+                ;; ------------------------------------------------------------
+                (otherwise
+                 (invoke-debugger e))))))
+
+       ,@body)))
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defmacro with-nst-error-boundary ((condition &key (log-level :error) (rethrow t)) &body body)
+    :description "Enterprise-grade NST error boundary. Separates logging, signaling and rethrow strategy."
+    `(handler-bind
+         ((error
+            (lambda (e)
+	      ;; Structured log entry
+              (let ((exceptionstr
+                      (format nil "~&[~A] [~A] ~A: ~A~%"
+                              (mysql-now)
+                              ,log-level
+                              (type-of e)
+                              e)))
+		;; Centralized logging (no deep-layer hard dependency)
+                (when (boundp '*HHUBBUSINESSFUNCTIONSLOGFILE*)
+                  (with-open-file (stream *HHUBBUSINESSFUNCTIONSLOGFILE*
+                                          :direction :output
+                                          :if-exists :append
+                                          :if-does-not-exist :create)
+                    (format stream "~A" exceptionstr)))
+		;; Optional rethrow strategy
+                (when ,rethrow
+                  (invoke-restart 'abort))
+		;; Signal domain-specific condition (Belnap compatible)
+                (signal ,condition :errstring exceptionstr)))))
+       (restart-case
+           (progn ,@body)
+	 (abort ()
+           :report "Abort NST operation and propagate failure."
+           (error ,condition :errstring "Operation aborted at NST boundary."))
+	 (continue ()
+           :report "Continue execution ignoring error."
+           nil)))))
 
 
 (defun check-null (value &optional (error-message "Null value encountered") (error-type 'null-value-error))
@@ -88,3 +221,38 @@
 ;; Helper macro for more concise null checking
 (defmacro ensure-not-null (value &optional message)
   `(check-null ,value ,message))
+
+(defun find-caller-name-from-backtrace ()
+  "Uses string parsing on SBCL's LIST-BACKTRACE to find the 
+   symbol name of the function that called the DB adapter."
+  (handler-case 
+      ;; We need to know which frame holds the caller:
+      ;; Frame 0: find-caller-name-from-backtrace
+      ;; Frame 1: log-critical-error 
+      ;; Frame 2: The adapter function (e.g., select-mock-data)
+      ;; Frame 3: The function that called the adapter (THE CALLER WE WANT)
+      (let* ((frame-to-inspect 3)
+             (backtrace-list (sb-debug:list-backtrace))
+             (frame-string (nth frame-to-inspect backtrace-list))) ; Get the 4th element (index 3)
+        
+        (if frame-string
+            ;; Parse the string: Find the opening '(' and read the list head.
+            ;; Example string: "  3: (CL-USER::MAIN-APP-FUNCTION 1)"
+            (let* ((start-pos (position #\( frame-string :test #'char=)) 
+                   (call-list (read-from-string (subseq frame-string start-pos))))
+              (if (listp call-list)
+                  (car call-list) ; Extract the first element (the function name)
+                  :unknown-fun-object))
+            :stack-too-shallow))
+    (error (c)
+      (format nil "Stack inspection error: ~A" c))))
+
+(defun log-critical-error (status message &optional payload)
+  "Logs a critical error, automatically including the function that initiated the DB call."
+  (let ((caller (find-caller-name-from-backtrace)))
+    (format t "~&[CRITICAL LOG ~A] Called by: ~A | ~A~%[Payload/Error]: ~A" 
+            status 
+            caller 
+            message 
+            payload)))
+

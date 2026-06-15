@@ -1,3 +1,9 @@
+;;; dod-ui-ord.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 ;;(clsql:file-enable-sql-reader-syntax)
@@ -126,7 +132,7 @@
 		     (cust-order (get-order vord))
 		     (cust-name (slot-value customer 'name))
 		     (cust-phone (slot-value customer 'phone))
-		     (company (get-company customer))
+		     (company (customer-company customer))
 		     (currsymbol (get-currency-html-symbol (get-account-currency company)))
 		     (ship-address (slot-value vord 'ship-address))
 		     (order-comments (slot-value cust-order 'comments)))

@@ -1,3 +1,9 @@
+;;; nst-bl-itm.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-%
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -6,6 +12,69 @@
 ;; DO NOT COMPILE THIS FILE USING CTRL + C CTRL + K (OR CTRL + CK)
 ;; DO NOT ADD THIS FILE TO COMPILE.LISP FOR MASS COMPILATION. 
 
+;; 1. The Key Helper (to ensure consistency across methods)
+(defun %get-breakdown-key (item)
+  (format nil "~A-~A-~A-~A" 
+          (hsncode item) (cgstrate item) (sgstrate item) (igstrate item)))
+
+;; 2. Remove Method
+(defmethod remove-item-from-tax-breakdown ((breakdown gst-breakdown) (item InvoiceItem))
+  "Reduces totals for the specific HSN/Rate. If totals hit zero, removes the entry."
+  (let* ((key (%get-breakdown-key item))
+         (entry (gethash key (entries breakdown))))
+    (when entry
+      ;; Subtract values
+      (decf (taxable-value entry) (taxablevalue item))
+      (decf (cgst-amount entry)   (cgstamt item))
+      (decf (sgst-amount entry)   (sgstamt item))
+      (decf (igst-amount entry)   (igstamt item))
+      
+      ;; Clean up: If taxable value is 0 (or near zero due to float precision), 
+      ;; remove the row from the summary
+      (when (<= (taxable-value entry) 0.01)
+        (remhash key (entries breakdown))))))
+
+;; 3. Update Method
+(defmethod update-item-in-tax-breakdown ((breakdown gst-breakdown) (old-item InvoiceItem) (new-item InvoiceItem))
+  "Updates the breakdown by removing the old item data and adding the new item data.
+   This handles cases where the HSN or Tax Rate might have changed."
+  (remove-item-from-tax-breakdown breakdown old-item)
+  (add-item-to-tax-breakdown breakdown new-item))
+
+;; 4. Modified Add Method (using the new key helper)
+(defmethod add-item-to-tax-breakdown ((breakdown gst-breakdown) (item InvoiceItem))
+  (let* ((key (%get-breakdown-key item))
+         (entry (gethash key (entries breakdown)
+                         (make-instance 'tax-entry 
+                                        :hsn-code (hsncode item)
+                                        :cgst-rate (cgstrate item)
+                                        :sgst-rate (sgstrate item)
+                                        :igst-rate (igstrate item)))))
+    (incf (taxable-value entry) (taxablevalue item))
+    (incf (cgst-amount entry)   (cgstamt item))
+    (incf (sgst-amount entry)   (sgstamt item))
+    (incf (igst-amount entry)   (igstamt item))
+    (setf (gethash key (entries breakdown)) entry)))
+
+(defmethod  generate-gst-tax-breakdown ((invoice-header InvoiceHeader) (invoice-items list))
+  "Creates a live GST breakdown from raw database records."
+  (let* ((placeofsupply (slot-value invoice-header 'placeofsupply))
+	 (statecode (slot-value invoice-header 'statecode))
+	 (is-interstate (if (equal statecode placeofsupply) NIL T)) 
+	 (breakdown (make-instance 'gst-breakdown :is-interstate is-interstate)))
+    ;; Iterate through the items extracted from the DB
+    (dolist (item invoice-items)
+      (add-item-to-tax-breakdown breakdown item))
+    ;; Return the populated breakdown object
+    breakdown))
+
+
+(defmethod get-sorted-summary ((breakdown gst-breakdown))
+  "Converts hash table to a list sorted by HSN for consistent printing."
+  (let ((result nil))
+    (maphash (lambda (k v) (declare (ignore k)) (push v result)) 
+             (entries breakdown))
+    (sort result #'string< :key #'hsn-code)))
 
 
 (defun select-all-invoice-items (invoiceheader company)
@@ -19,6 +88,10 @@
 		  [= [:tenant-id] tenant-id]]
 		    :limit 100
 		    :caching *dod-database-caching* :flatp t )))
+
+;; If you specifically want to search by prd-id
+(defun find-invoice-item (prd-id items)
+  (find prd-id items :key #'prd-id :test #'equal))
 
 (defun select-invoice-item-by-product-id (product-id invoiceheader company)
   :documentation "This function stores all the currencies in a hashtable. The Key = country, Value = list of currency, code and symbol."
@@ -66,15 +139,23 @@
 
 (defmethod doDelete ((service InvoiceItemService) (requestmodel InvoiceItemRequestModel))
   :description "This method is responsible for Deleting a Web push notification subscription for a given vendor"
-  (let* ((company (company requestmodel))
+  (let* ((comp (company requestmodel))
 	 (invoiceheader (invoiceheader requestmodel))
 	 (prd-id (prd-id requestmodel))
-	 (invoiceitem (select-invoice-item-by-product-id prd-id invoiceheader company))
+	 (domainobj (make-instance 'InvoiceItem))
+	 (invoiceitemdbobj (select-invoice-item-by-product-id prd-id invoiceheader comp))
 	 (InvoiceItemdbservice (make-instance 'InvoiceItemDBService)))
-    (setf (slot-value InvoiceItemdbservice 'company) company)
-    (setf (slot-value InvoiceItemdbservice 'dbobject) invoiceitem)
-    ;; Delete the record
-    (db-delete InvoiceItemdbservice)))
+
+    (when invoiceitemdbobj
+      (setf (slot-value InvoiceItemdbservice 'dbobject) invoiceitemdbobj)
+      (setf (slot-value InvoiceItemdbservice 'businessobject) domainobj)
+      (setcompany InvoiceItemdbservice comp)
+      (let ((bk (with-db-delete (InvoiceItemdbservice :allow-idempotent T :source "Invoice item delete"))))
+	;; Transfer knowledge up to the service layer
+	(setf (bo-knowledge service) bk)
+	(setf domainobj (bo-knowledge-payload bk))
+	;; Return the newly created warehouse domain object
+	domainobj))))
 
 (defmethod doCreate ((service InvoiceItemService) (requestmodel InvoiceItemRequestModel))
   (let* ((InvoiceItemdbservice (make-instance 'InvoiceItemDBService))
@@ -96,13 +177,15 @@
 	 (igstamt (igstamt requestmodel))
 	 (totalitemval (totalitemval requestmodel))
 	 (domainobj (createInvoiceItemobject InvoiceHeader prd-id prddesc hsncode qty uom price discount taxablevalue cgstrate cgstamt sgstrate sgstamt igstrate igstamt totalitemval company )))
-         ;; Initialize the DB Service
+    ;; Initialize the DB Service
     (init InvoiceItemdbservice domainobj)
     (copy-businessobject-to-dbobject InvoiceItemdbservice)
-    (db-save InvoiceItemdbservice)
-    ;; Return the newly created warehouse domain object
-    domainobj))
-
+    (let ((bk (with-db-create (InvoiceItemdbservice :source "Invoice Item create"))))
+      ;; Transfer knowledge up to the service layer
+      (setf (bo-knowledge service) bk)
+      (setf domainobj (bo-knowledge-payload bk))
+      ;; Return the newly created warehouse domain object
+      domainobj)))
 
 (defun createInvoiceItemobject (InvoiceHeader prd-id prddesc hsncode qty uom price discount taxablevalue cgstrate cgstamt sgstrate sgstamt igstrate igstamt totalitemval  company)
   (let* ((domainobj  (make-instance 'InvoiceItem 
@@ -125,6 +208,14 @@
 				    :status "PENDING"
 				    :company company)))
     domainobj))
+
+
+(defmethod Copy-DbObject-To-BusinessObject ((dbas InvoiceItemDBService))
+  :description "Syncs the dbobject and domain object"
+  (let ((dbobj (slot-value dbas 'dbobject))
+        (domainobj (slot-value dbas 'businessobject)))
+    (setf (slot-value domainobj 'company) (company dbas))
+    (setf (slot-value dbas 'businessobject) (copyInvoiceItem-dbtodomain dbobj domainobj))))
 
 (defmethod Copy-BusinessObject-To-DBObject ((dbas InvoiceItemDBService))
   :description "Syncs the dbobject and the domainobject"
@@ -273,14 +364,16 @@
       (setf (slot-value InvoiceItemdbobj 'totalitemval) totalitemval)
       (setf (slot-value InvoiceItemdbobj 'status) status))
     ;;  FIELD UPDATE CODE ENDS HERE. 
-    
     (setf (slot-value InvoiceItemdbservice 'dbobject) InvoiceItemdbobj)
     (setf (slot-value InvoiceItemdbservice 'businessobject) domainobj)
-    
     (setcompany InvoiceItemdbservice comp)
-    (db-save InvoiceItemdbservice)
-    ;; Return the newly created UPI domain object
-    (copyInvoiceItem-dbtodomain InvoiceItemdbobj domainobj)))
+    ;; Return the newly created Invoice Header domain object
+    (let ((bk (with-db-update (InvoiceItemdbservice :source "Invoice Item Update"))))
+      ;; Transfer knowledge up to the service layer
+      (setf (bo-knowledge service) bk)
+      (setf domainobj (bo-knowledge-payload bk))
+      ;; Return the newly created warehouse domain object
+      domainobj)))
 
 
 ;; PROCESS THE READ REQUEST
@@ -293,12 +386,16 @@
   (let* ((comp (company requestmodel))
 	 (invoiceheader (invoiceheader requestmodel))
 	 (prd-id (prd-id requestmodel))
-	 (dbInvoiceItem (select-invoice-item-by-product-id  prd-id invoiceheader comp))
+	 (dbInvoiceItem-knowledge (with-db-call (select-invoice-item-by-product-id  prd-id invoiceheader comp)))
 	 (InvoiceItemobj (make-instance 'InvoiceItem)))
     ;; return back a Vpaymentmethod  response model
     (setf (slot-value InvoiceItemobj 'company) comp)
     (setf (slot-value InvoiceItemobj 'InvoiceHeader) invoiceheader)
-    (copyInvoiceItem-dbtodomain dbInvoiceItem InvoiceItemobj)))
+    (setf (bo-knowledge service) dbInvoiceItem-knowledge)
+    (when (eq (bo-knowledge-truth dbInvoiceItem-knowledge) :T)
+      (let ((dbInvoiceItem (bo-knowledge-payload dbInvoiceItem-knowledge)))
+	(copyInvoiceItem-dbtodomain dbInvoiceItem InvoiceItemobj)))
+    InvoiceItemobj))
 
 
 (defun copyInvoiceItem-dbtodomain (source destination)

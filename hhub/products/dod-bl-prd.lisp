@@ -1,3 +1,9 @@
+;;; dod-bl-prd.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -93,10 +99,11 @@
 
 
 (defun search-item-in-list (key value list)
-  (if (equal value (slot-value (car list) key))
-      (car list)
-      ;;else
-      (search-item-in-list key value (cdr list))))
+  (find value list 
+        :test #'equal 
+        :key (lambda (item) (slot-value item key))))
+
+
 
 (defun filter-products-by-category (category-id list)
   (remove nil (mapcar (lambda (item)
@@ -265,6 +272,7 @@
 				    :approved-flag "N"
 				    :approval-status "PENDING"
 				    :prd-type prd-type
+				    :product-code (format nil "PRD-~A" (hhub-random-password 10))
 				    :deleted-state "N")))
 
 (defun create-bulk-products (modelfunc)

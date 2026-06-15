@@ -1,3 +1,9 @@
+;;; dod-bl-upi.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ;; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
@@ -86,9 +92,13 @@
     (setf (slot-value upipaymentsdbservice 'businessobject) upiobj)
     
     (setcompany upipaymentsdbservice comp)
-    (db-save upipaymentsdbservice)
-    ;; Return the newly created UPI domain object
-    (copyupipayment-dbtodomain upidbobj upiobj)))
+    
+    (let ((bk (with-db-update (upipaymentsdbservice :source "UPI payment received status update"))))
+      ;; Transfer knowledge up to the service layer
+      (setf (bo-knowledge service) bk)
+      (setf upiobj (bo-knowledge-payload bk))
+      ;; Return the newly created warehouse domain object
+      upiobj)))
  
 
 (defun get-vendor-orders-from-upi-transactions ()
@@ -151,9 +161,13 @@
     ;; Initialize the DB Service
     (init upipaymentsdbservice upiobj)
     (copy-businessobject-to-dbobject upipaymentsdbservice)
-    (db-save upipaymentsdbservice)
-    ;; Return the newly created UPI domain object
-    upiobj))
+    (let ((bk (with-db-create (upipaymentsdbservice :source "UPI payments create"))))
+      ;; Transfer knowledge up to the service layer
+      (setf (bo-knowledge service) bk)
+      (setf upiobj (bo-knowledge-payload bk))
+      ;; Return the newly created warehouse domain object
+      upiobj)))
+
 
 (defmethod init ((dbas UpiPaymentsDBService) (bo UpiPayment))
   :description "Set the DB object and domain object"

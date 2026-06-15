@@ -1,7 +1,13 @@
+;;; nst-bl-otp.lisp
+;;;
+;;; Copyright (c) 2026 Nine Stores. All rights reserved.
+;;;
+;;; Distributed under the MIT License. See LICENSE file in the project root.
+
 ; -*- mode: common-lisp; coding: utf-8 -*-
 (in-package :nstores)
 
-(defparameter *otp-cleanup-interval* 60)     ; seconds between TTL cleanup
+(defparameter *otp-cleanup-interval* 60)     ; seconds between TTL cleanup. should be less than TTL. 
 (defparameter *otp-default-ttl* 120)         ; 2 minutes
 (defparameter *log-dump-interval* 3600)       ; every 1 hour
 
@@ -53,14 +59,17 @@
      :name "otp-log-dump-thread")
 
     ;; Store interface function
-    (lambda (action &key persona purpose phone otp context ip ttl log-dir)
-      (let ((key (format nil "~A:~A:~A" persona purpose phone)))
+    (lambda (action &key session-id persona purpose phone otp context ip ttl log-dir)
+      (let ((key (format nil "~A" session-id)))
         (bt:with-lock-held (lock)
           (ecase action
             (:set
              (setf (gethash key otp-table)
                    (list :otp otp
-                         :context context
+			 :phone phone
+			 :persona persona
+			 :purpose purpose
+			 :context context
                          :timestamp (get-universal-time)
                          :ttl (or ttl *otp-default-ttl*)))
 
@@ -68,7 +77,7 @@
              (push (list :time (mysql-now)
                          :phone phone
                          :otp (mask-otp (format nil "~A" otp))
-                         :ip ip
+			 :ip ip
                          :persona persona
                          :purpose purpose)
                    log-entries))
@@ -79,7 +88,13 @@
              (getf (gethash key otp-table) :otp))
             (:get-context
              (getf (gethash key otp-table) :context))
-            (:delete
+	    (:get-persona
+	     (getf (gethash key otp-table) :persona))
+	    (:get-purpose
+	     (getf (gethash key otp-table) :purpose))
+	    (:get-phone
+	     (getf (gethash key otp-table) :phone))
+	    (:delete
              (remhash key otp-table))
             (:clear
              (clrhash otp-table)
