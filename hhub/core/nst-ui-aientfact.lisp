@@ -1,21 +1,41 @@
-;;; nst-ui-aientfact.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
-
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-;; nst-ui-aientfact.lisp
-;; UI layer + Context Flow Dispatcher routes for DOD_PROCURE_ENTITY_FACT.
-;;
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— AI Entity Fact UI —— 采购实体事实的 UI 控制器与路由注册
+;;;; 分层：UI 控制器/视图层
+;;;; 文件：hhub/core/nst-ui-aientfact.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：为 DOD_PROCURE_ENTITY_FACT 表提供 UI 渲染、搜索、列表展示和表单对话框。
+;;;;       实现 MVC 模型创建器（show / create / update）和 Widget 组装器。
+;;;;       注册 Context Flow Dispatcher 出站路由（:aientfact/create, :aientfact/read,
+;;;;       :aientfact/readall, :aientfact/update, :aientfact/delete）。
+;;;;       UI 设计哲学：事实主要由 AI Agent 写入，人类界面以只读审计为主；人工修正
+;;;;       走 HUMAN_ENTERED 路径。置信度与来源类型可视化，确保 Agent 输出可解释。
+;;;;
+;;;; 主要导出：
+;;;;   %confidence-badge-class              — 将置信度映射为 Bootstrap badge 颜色
+;;;;   aientfact-search-html                — 渲染带 entity-id 作用域的搜索栏
+;;;;   com-hhub-transaction-aientfacts-page — 事实列表页面入口（MVC 页面）
+;;;;   create-model-for-showaientfacts      — 加载指定实体的全部当前事实
+;;;;   create-model-for-createaientfact     — 人工录入事实（HUMAN_ENTERED）
+;;;;   create-model-for-updateaientfact     — 过期旧事实并插入新版本
+;;;;   register-outbound-route              — 五条 CFFD 出站路由注册（:aientfact/*）
+;;;;   RenderListViewHTML / display-aientfact-row — 表格行渲染（含置信度 badge）
+;;;;
+;;;; 关联：
+;;;;   上游使用方：管理员/运营后台页面、AI Agent 回调、审计视图
+;;;;   下游依赖：AIEntityFactAdapter, AIEntityFactPresenter,
+;;;;             AIEntityFactHTMLView / AIEntityFactJSONView,
+;;;;             with-mvc-ui-page, with-mvc-redirect-ui, modal-dialog
+;;;; ============================================================================
+(in-package :nstores)
+
+;;; ─── Rendering helpers ───────────────────────────────────────────────────────
+
 ;; UI PHILOSOPHY FOR THIS TABLE:
 ;;   Facts are primarily written by AI agents, not humans.
 ;;   The human-facing UI is read-heavy: inspect and audit what agents asserted.
 ;;   HUMAN_ENTERED write path exists for operator corrections only.
 ;;   Expose confidence and source-type prominently — agents need interpretability.
-(in-package :nstores)
-
-;;; ─── Rendering helpers ───────────────────────────────────────────────────────
 
 (defun %confidence-badge-class (confidence)
   "Map confidence to Bootstrap badge colour for visual cue."

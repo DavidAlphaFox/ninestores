@@ -1,26 +1,33 @@
-;;; nst-bl-aientfact.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
-
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-;; nst-bl-aientfact.lisp
-;; Business layer for DOD_PROCURE_ENTITY_FACT — EAV versioned fact store.
-;;
-;; IMMUTABILITY CONTRACT:
-;;   doUpdate  = expire current fact (SET VALID_TO = NOW()) + insert new row.
-;;   doDelete  = expire current fact (SET VALID_TO = NOW()). No physical delete.
-;;   doCreate  = INSERT only. Never UPDATE an existing row.
-;;
-;; LEGAL / AUDIT NOTE:
-;;   This table is the evidentiary record for AI decisions.
-;;   Physical deletion of rows may breach EU AI Act Article 13 (transparency)
-;;   and data retention obligations. Soft-expiry via VALID_TO is mandatory.
-;;
-;; MULTI-TENANT NOTE:
-;;   TENANT_ID has no FK declared in MySQL schema. Enforce in every query.
-;;   Do not rely on the DB engine to prevent cross-tenant reads.
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— AI Entity Fact —— EAV 版本化事实存储（AI 决策的不可变日志）
+;;;; 分层：BL（业务逻辑层）
+;;;; 文件：hhub/core/nst-bl-aientfact.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：为 DOD_PROCURE_ENTITY_FACT 表提供业务逻辑层，实现 EAV（Entity-Attribute-Value）
+;;;;       版本化事实存储。所有 AI 断言的事实均以 VALID_FROM/VALID_TO 时间戳进行
+;;;;       软过期管理，确保物理删除被禁止（满足 EU AI Act Article 13 透明度与
+;;;;       数据保留义务）。支持事实的创建、读取、更新（过期+插入新版本）、
+;;;;       软删除及历史追溯。多租户隔离通过 TENANT_ID 在每次查询中显式强制。
+;;;;
+;;;; 主要导出：
+;;;;   select-current-fact          — 获取单条存活事实（VALID_TO IS NULL）
+;;;;   select-all-current-facts     — 获取实体全部存活事实
+;;;;   select-fact-history          — 获取指定事实键的完整版本历史
+;;;;   select-facts-by-key-prefix   — 按命名空间前缀查询存活事实
+;;;;   select-facts-by-source-type  — 按断言来源过滤存活事实
+;;;;   createAIEntityFactObject     — 构造新的 AIEntityFact 领域对象
+;;;;   copyAIEntityFact-domaintodb  — 领域对象 → DB 对象同步
+;;;;   copyAIEntityFact-dbtodomain  — DB 对象 → 领域对象同步
+;;;;   validate-aientfact-source-type — 校验 SOURCE_TYPE 是否在受控词汇表中
+;;;;   validate-aientfact-confidence  — 校验 CONFIDENCE 是否在 [0.4, 1.0] 范围内
+;;;;
+;;;; 关联：
+;;;;   上游使用方：AI Agent 决策流程、vendor 后台 AI 助手
+;;;;   下游依赖：dod-procure-entity-fact 表（CLSQL view-class）；
+;;;;             nst-bl-beltrusys.lisp（bo-knowledge 包装类）；
+;;;;             nst-mult-logic.lisp（with-db-call 等边界宏）
+;;;; ============================================================================
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 
@@ -324,4 +331,4 @@
     vm))
 
 (defmethod CreateAllViewModel ((presenter AIEntityFactPresenter) rm-list)
-  (mapcar (lambda (rm) (createviewmodel presenter rm)) rm-list))
+  (mapcar (lambda (rm) (createviewmodel presenter rm)) rm-list)
