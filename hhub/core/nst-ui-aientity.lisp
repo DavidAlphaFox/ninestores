@@ -5,10 +5,40 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-;; nst-ui-aientity.lisp
-;; UI layer + Context Flow Dispatcher routes for DOD_PROCURE_ENTITY.
-;; ENTITY_TYPE allowed values must be governed — arbitrary strings here
-;; risk breaking downstream AI agents that key off ENTITY_TYPE.
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— AI Procurement Entity UI 层 —— 采购实体锚点的 UI 控制器与路由注册
+;;;; 分层：UI 控制器/视图层
+;;;; 文件：hhub/core/nst-ui-aientity.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：提供 AI Procurement Entity（DOD_PROCURE_ENTITY）的完整 MVC UI 层：
+;;;;       1. HTML 视图渲染（搜索框、列表视图、行内编辑弹窗）
+;;;;       2. MVC 模型创建器（show / create / update 的 model 组装）
+;;;;       3. MVC 部件创建器（页面 widget 组合：标题、搜索、添加按钮、列表）
+;;;;       4. HTTP Action 处理器（页面入口 + create/update 重定向）
+;;;;       5. Context Flow Dispatcher 出站路由注册（:aientity/read, :aientity/create,
+;;;;          :aientity/readall, :aientity/update, :aientity/delete）
+;;;;
+;;;; 主要导出：
+;;;;   aientity-search-html              — 渲染实体搜索输入框 HTML
+;;;;   RenderListViewHTML (AIEntityHTMLView) — 渲染实体列表表格
+;;;;   display-aientity-row            — 渲染单行实体数据 + 编辑按钮/弹窗
+;;;;   com-hhub-transaction-create-aientity-dialog — 创建/编辑实体的模态框表单
+;;;;   create-model-for-showaientities   — 组装 show 页面的 model + view
+;;;;   create-model-for-createaientity   — 组装 create 请求的 model
+;;;;   create-model-for-updateaientity   — 组装 update 请求的 model
+;;;;   create-widgets-for-showaientities — 组装 show 页面的 widget 列表
+;;;;   com-hhub-transaction-aientities-page        — 页面入口处理器
+;;;;   com-hhub-transaction-create-aientity-action — create 提交处理器
+;;;;   com-hhub-transaction-update-aientity-action — update 提交处理器
+;;;;   register-outbound-route (:aientity/create :aientity/read :aientity/readall
+;;;;                            :aientity/update :aientity/delete) — 出站路由注册
+;;;;
+;;;; 关联：
+;;;;   上游使用方：vendor 后台 AI Agent 助手、采购流程上下文编排器
+;;;;   下游依赖：AIEntityAdapter（CRUD 适配）、AIEntityPresenter（VM 创建）、
+;;;;             AIEntityHTMLView / AIEntityJSONView（视图渲染）、
+;;;;             AIEntityRequestModel（请求模型）
+;;;; ============================================================================
 (in-package :nstores)
 
 ;;; ─── HTML Helpers ────────────────────────────────────────────────────────────

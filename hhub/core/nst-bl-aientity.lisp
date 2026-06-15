@@ -1,14 +1,27 @@
-;;; nst-bl-aientity.lisp
-;;;
-;;; Copyright (c) 2026 Nine Stores. All rights reserved.
-;;;
-;;; Distributed under the MIT License. See LICENSE file in the project root.
-
 ;; -*- mode: common-lisp; coding: utf-8 -*-
-;; nst-bl-aientity.lisp
-;; Business layer for DOD_PROCURE_ENTITY.
-;; LEGAL NOTE: ENTITY_ID must map to canonical string IDs (VEND-001, CUST-001).
-;; Never expose raw TENANT_ID outside this module — multi-tenant data boundary.
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— AI Entity 身份管理 —— DOD_PROCURE_ENTITY 业务逻辑层
+;;;; 分层：BL（业务逻辑层）
+;;;; 文件：hhub/core/nst-bl-aientity.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：管理 AI 采购实体（DOD_PROCURE_ENTITY）的规范身份表，提供复合主键
+;;;;       （entity-id + tenant-id）下的多租户数据边界隔离。支持按 ID 查询、
+;;;;       按类型筛选、全量读取，以及完整的 CRUD 操作（创建、读取、更新、删除）。
+;;;;       所有查询均通过 Belnap 四值逻辑边界宏封装，确保 DB 操作的失败/异常
+;;;;       被统一捕获为 bo-knowledge 实例。ENTITY_ID 必须映射为规范字符串 ID
+;;;;       （如 VEND-001、CUST-001），TENANT_ID 不得外泄。
+;;;;
+;;;; 主要导出：
+;;;;   select-aientity-by-id      — 按复合 PK 查询单条实体
+;;;;   select-all-aientities      — 查询某租户下全部实体
+;;;;   select-aientities-by-type  — 按类型筛选实体
+;;;;   createAIEntityobject       — 构造 AIEntity 领域对象
+;;;;   updateAIEntityobject       — 更新现有实体类型
+;;;;
+;;;; 关联：
+;;;;   上游使用方：AI Agent 助手、vendor 后台实体管理
+;;;;   下游依赖：CLSQL 数据库层、nst-mult-logic.lisp（Belnap 边界宏）
+;;;; ============================================================================
 (in-package :nstores)
 (clsql:file-enable-sql-reader-syntax)
 

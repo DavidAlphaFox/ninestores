@@ -5,10 +5,34 @@
 ;;; Distributed under the MIT License. See LICENSE file in the project root.
 
 
+;; -*- mode: common-lisp; coding: utf-8 -*-
+;;;; ============================================================================
+;;;; 模块：core 平台基础 —— AI 采购实体 DAL —— DOD_PROCURE_ENTITY 数据访问层
+;;;; 分层：DAL（数据访问层）
+;;;; 文件：hhub/core/nst-dal-aientity.lisp
+;;;; ----------------------------------------------------------------------------
+;;;; 职责：定义 DOD_PROCURE_ENTITY 表的 CLSQL 视图类、请求/响应/视图模型、
+;;;;       适配器、服务、展示器及视图类。复合主键 (ENTITY_ID, TENANT_ID)，
+;;;;       无软删除（实体为权威记录）。为 AI 采购锚点/身份识别提供数据层支撑。
+;;;;
+;;;; 主要导出：
+;;;;   dod-procure-entity         — CLSQL 视图类，映射 dod_procure_entity 表
+;;;;   AIEntityRequestModel         — 创建/更新请求模型
+;;;;   AIEntitySearchRequestModel   — 搜索请求模型（含 entitytype-filter）
+;;;;   AIEntityResponseModel        — 响应模型
+;;;;   AIEntityViewModel            — 视图模型
+;;;;   AIEntityHTMLView             — HTML 视图类
+;;;;   AIEntity / AIEntityAdapter / AIEntityDBService / AIEntityPresenter / AIEntityService / AIEntityJSONView — 领域对象及服务层类
+;;;;
+;;;; 关联：
+;;;;   上游使用方：BL 层业务逻辑（如 nst-bl-aientity.lisp）
+;;;;   下游依赖：CLSQL、nstores 包基础设施（RequestModel/ResponseModel/ViewModel/BusinessObject 等）
+;;;; ============================================================================
+(in-package :nstores)
+
 ;; nst-dal-aientity.lisp
 ;; DAL layer for DOD_PROCURE_ENTITY — AI procurement anchor/identity table.
 ;; Composite PK: (ENTITY_ID, TENANT_ID). No soft-delete; entities are canonical.
-(in-package :nstores)
 
 ;;; ─── Request / Response / View Models ───────────────────────────────────────
 
